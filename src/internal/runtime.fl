@@ -1,0 +1,25 @@
+module fletui;
+under namespace root;
+
+extern unsafe i32 fletui_v1_terminal_open(**void output);
+
+extern unsafe i32 fletui_v1_terminal_close(*void handle);
+
+extern unsafe i32 fletui_v1_terminal_size(
+    *void handle,
+    *u16 columns,
+    *u16 rows
+);
+
+extern unsafe i32 fletui_v1_terminal_write_all(
+    *void handle,
+    *const u8 source,
+    usize length
+);
+
+extern unsafe i32 fletui_v1_terminal_read(
+    *void handle,
+    *u8 destination,
+    usize capacity,
+    *usize bytes_read
+);

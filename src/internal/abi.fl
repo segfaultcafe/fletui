@@ -1,0 +1,189 @@
+module fletui;
+under namespace root;
+
+foreign c {
+    #include <errno.h>
+    #include <stdint.h>
+    #include <stdlib.h>
+    #include <sys/ioctl.h>
+    #include <termios.h>
+    #include <unistd.h>
+
+    typedef enum {
+        FLETUI_STATUS_OK = 0,
+        FLETUI_STATUS_INVALID_ARGUMENT = 1,
+        FLETUI_STATUS_OUT_OF_MEMORY = 2,
+        FLETUI_STATUS_NOT_A_TERMINAL = 3,
+        FLETUI_STATUS_IO_ERROR = 4,
+        FLETUI_STATUS_UNSUPPORTED = 5,
+        FLETUI_STATUS_INVALID_SIZE = 6,
+    } FletuiStatus;
+
+    typedef struct {
+        struct termios original;
+        int input_fd;
+        int output_fd;
+        int active;
+    } FletuiTerminal;
+
+    int32_t fletui_v1_terminal_open(void **output) {
+        if (output == NULL) {
+            return FLETUI_STATUS_INVALID_ARGUMENT;
+        }
+        *output = NULL;
+
+        if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO)) {
+            return FLETUI_STATUS_NOT_A_TERMINAL;
+        }
+
+        FletuiTerminal *terminal = calloc(1, sizeof(FletuiTerminal));
+        if (terminal == NULL) {
+            return FLETUI_STATUS_OUT_OF_MEMORY;
+        }
+
+        terminal->input_fd = STDIN_FILENO;
+        terminal->output_fd = STDOUT_FILENO;
+
+        if (tcgetattr(terminal->input_fd, &terminal->original) != 0) {
+            int saved_errno = errno;
+            free(terminal);
+            
+            if (saved_errno == ENOTTY) {
+                return FLETUI_STATUS_NOT_A_TERMINAL;
+            }
+
+            return FLETUI_STATUS_IO_ERROR;
+        }
+
+        struct termios raw = terminal->original;
+        raw.c_iflag &= (tcflag_t)~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
+        raw.c_oflag &= (tcflag_t)~OPOST;
+        raw.c_cflag |= CS8;
+        raw.c_lflag &= (tcflag_t)~(ECHO | ICANON | IEXTEN | ISIG);
+        raw.c_cc[VMIN] = 0;
+        raw.c_cc[VTIME] = 0;
+
+        if (tcsetattr(terminal->input_fd, TCSAFLUSH, &raw) != 0) {
+            free(terminal);
+            return FLETUI_STATUS_IO_ERROR;
+        }
+
+        terminal->active = 1;
+        *output = terminal;
+        return FLETUI_STATUS_OK;
+    }
+
+    int32_t fletui_v1_terminal_close(void *opaque) {
+        FletuiTerminal *terminal = opaque;
+        if (terminal == NULL) {
+            return FLETUI_STATUS_OK;
+        }
+
+        int32_t status = FLETUI_STATUS_OK;
+        if (terminal->active) {
+            if (tcsetattr(
+                terminal->input_fd,
+                TCSAFLUSH,
+                &terminal->original
+            ) != 0) {
+                status = FLETUI_STATUS_IO_ERROR;
+            }
+
+            terminal->active = 0;
+        }
+
+        free(terminal);
+        return status;
+    }
+
+    int32_t fletui_v1_terminal_size(
+        void *opaque,
+        uint16_t *columns,
+        uint16_t *rows
+    ) {
+        FletuiTerminal *terminal = opaque;
+        if (terminal == NULL || columns == NULL || rows == NULL) {
+            return FLETUI_STATUS_INVALID_ARGUMENT;
+        }
+
+        struct winsize size;
+        if (ioctl(terminal->output_fd, TIOCGWINSZ, &size) != 0) {
+            return FLETUI_STATUS_IO_ERROR;
+        }
+
+        if (size.ws_col == 0 || size.ws_row == 0) {
+            return FLETUI_STATUS_INVALID_SIZE;
+        }
+
+        *columns = size.ws_col;
+        *rows = size.ws_row;
+        return FLETUI_STATUS_OK;
+    }
+
+    int32_t fletui_v1_terminal_write_all(
+        void *opaque,
+        const uint8_t *source,
+        size_t length
+    ) {
+        FletuiTerminal *terminal = opaque;
+        if (terminal == NULL || (source == NULL && length != 0)) {
+            return FLETUI_STATUS_INVALID_ARGUMENT;
+        }
+
+        size_t offset = 0;
+        while (offset < length) {
+            ssize_t written = write(
+                terminal->output_fd,
+                source + offset,
+                length - offset
+            );
+
+            if (written < 0 && errno == EINTR) {
+                continue;
+            }
+            if (written <= 0) {
+                return FLETUI_STATUS_IO_ERROR;
+            }
+
+            offset += (size_t)written;
+        }
+
+        return FLETUI_STATUS_OK;
+    }
+
+    int32_t fletui_v1_terminal_read(
+        void *opaque,
+        uint8_t *destination,
+        size_t capacity,
+        size_t *bytes_read,
+    ) {
+        FletuiTerminal *terminal = opaque;
+
+        if (terminal == NULL || bytes_read == NULL || (destination == NULL && capacity != 0)) {
+            return FLETUI_STATUS_INVALID_ARGUMENT;
+        }
+
+        *bytes_read = 0;
+        if (capacity == 0) {
+            return FLETUI_STATUS_OK;
+        }
+
+        for (;;) {
+            ssize_t count = read(terminal->input_fd, destination, capacity);
+            if (count < 0 && errno == EINTR) {
+                continue;
+            }
+
+            if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                return FLETUI_STATUS_OK;
+            }
+
+            if (count < 0) {
+                return FLETUI_STATUS_IO_ERROR;
+            }
+
+            *bytes_read = (size_t)count;
+            return FLETUI_STATUS_OK;
+        }
+    }
+}

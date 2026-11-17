@@ -1,0 +1,116 @@
+module fletui;
+
+export error FletuiError {
+    NotATerminal,
+    OpenFailed,
+    SizeFailed,
+    WriteFailed,
+    ReadFailed,
+    Unsupported,
+    Closed
+}
+
+export structure Size {
+    u16 columns;
+    u16 rows;
+};
+
+export structure Terminal {
+    private *void handle;
+};
+
+(Terminal, error) Terminal::open() {
+    *void handle = null;
+
+    unsafe {
+        i32 status = fletui_v1_terminal_open(&raw handle);
+        try error_from_status(status, FletuiError.OpenFailed);
+    }
+
+    return (build Terminal {
+        self.handle = handle;
+    }, none);
+}
+
+Terminal Terminal::zero() override {
+    return build Terminal {
+        self.handle = null;
+    };
+}
+
+void Terminal::tear(&self) override {
+    if self->handle == null {
+        return;
+    }
+    
+    *void handle = self->handle;
+    self->handle = null;
+
+    unsafe {
+        fletui_v1_terminal_close(handle);
+    }
+}
+
+bool Terminal::isOpen(&const self) {
+    return self->handle != null;
+}
+
+(Size, error) Terminal::size(&const self) {
+    if self->handle == null {
+        return (none, FletuiError.Closed);
+    }
+
+    u16 columns = 0;
+    u16 rows = 0;
+
+    unsafe {
+        i32 status = fletui_v1_terminal_size(
+            self->handle,
+            &raw columns,
+            &raw rows
+        );
+        try error_from_status(status, FletuiError.SizeFailed);
+    }
+
+    return (build Size {
+        self.columns = columns;
+        self.rows = rows;
+    }, none);
+}
+
+error Terminal::writeAll(&const self, stringv source) {
+    if self->handle == null {
+        return FletuiError.Closed;
+    }
+
+    unsafe {
+        i32 status = fletui_v1_terminal_write_all(
+            self->handle,
+            source.data(),
+            source.len().cast<usize>
+        );
+        try error_from_status(status, FletuiError.WriteFailed);
+    }
+
+    return none;
+}
+
+(usize, error) Terminal::read(&const self, []u8 destination) {
+    if self->handle == null {
+        return (none, FletuiError.Closed);
+    }
+
+    usize bytesRead = 0;
+    unsafe {
+        i32 status = fletui_v1_terminal_read(
+            self->handle,
+            destination.data(),
+            destination.len(),
+            &raw bytesRead
+        );
+
+        try error_from_status(status, FletuiError.ReadFailed);
+    }
+
+    return (bytesRead, none);
+}

@@ -1,0 +1,20 @@
+module fletui;
+under namespace root;
+
+error error_from_status(i32 status, error fallback) {
+    if status == 0 {
+        return none;
+    }
+
+    if status == 2 {
+        return AllocationError.OutOfMemory;
+    }
+    if status == 3 {
+        return FletuiError.NotATerminal;
+    }
+    if status == 5 {
+        return FletuiError.Unsupported;
+    }
+
+    return fallback;
+}

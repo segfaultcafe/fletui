@@ -1,0 +1,5 @@
+module fletui;
+
+export i32 answer() {
+    return 42;
+}
