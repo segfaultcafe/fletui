@@ -1,0 +1,44 @@
+module fletui;
+
+export enum KeyCode: u8 {
+    default Unknown,
+    Character,
+    Enter,
+    Escape,
+    Backspace,
+    Tab,
+    Up,
+    Down,
+    Left,
+    Right,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    Insert,
+    Delete,
+}
+
+export enum EventKind: u8 {
+    default None,
+    Key,
+    Resize,
+}
+
+export structure KeyModifiers {
+    bool shift, alt, control;
+};
+
+export structure KeyEvent {
+    KeyCode code;
+    KeyModifiers modifiers;
+    // Unicode scalar value when code == Character
+    u32 codepoint;
+};
+
+export structure Event {
+    EventKind kind;
+    KeyEvent key;
+    Size size;
+};
+

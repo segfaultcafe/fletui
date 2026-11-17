@@ -1,15 +1,5 @@
 module fletui;
 
-export error FletuiError {
-    NotATerminal,
-    OpenFailed,
-    SizeFailed,
-    WriteFailed,
-    ReadFailed,
-    Unsupported,
-    Closed
-}
-
 export structure Size {
     u16 columns;
     u16 rows;

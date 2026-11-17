@@ -1,22 +1,27 @@
 module fletui;
 under namespace root;
 
+// Opens the process terminal in raw mode and stores its opaque handle in output.
 extern unsafe i32 fletui_v1_terminal_open(**void output);
 
+// Restores the terminal state and releases handle; a null handle is accepted.
 extern unsafe i32 fletui_v1_terminal_close(*void handle);
 
+// Writes the terminal dimensions to columns and rows.
 extern unsafe i32 fletui_v1_terminal_size(
     *void handle,
     *u16 columns,
     *u16 rows
 );
 
+// Writes all length bytes from source to the terminal output.
 extern unsafe i32 fletui_v1_terminal_write_all(
     *void handle,
     *const u8 source,
     usize length
 );
 
+// Reads up to capacity bytes without blocking and stores the count in bytes_read.
 extern unsafe i32 fletui_v1_terminal_read(
     *void handle,
     *u8 destination,

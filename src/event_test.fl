@@ -1,0 +1,71 @@
+module fletui_test;
+under namespace root;
+
+@imports
+    :: root::fletui
+    :: lib::std::tests::asserts
+    :: lib::std::tests::testing;
+
+test event_defaults_to_none_with_empty_payloads(&testing::UnitTest t) {
+    fletui::Event event = none;
+
+    asserts::is_true(
+        t,
+        event.kind == fletui::EventKind.None and
+            event.key.code == fletui::KeyCode.Unknown and
+            !event.key.modifiers.shift and
+            !event.key.modifiers.alt and
+            !event.key.modifiers.control and
+            event.key.codepoint == 0 and
+            event.size.columns == 0 and event.size.rows == 0,
+        "the zero event is None with empty key and resize payloads"
+    );
+}
+
+test key_event_preserves_codepoint_and_modifiers(&testing::UnitTest t) {
+    event := build fletui::Event {
+        self.kind = fletui::EventKind.Key;
+        self.key = build fletui::KeyEvent {
+            self.code = fletui::KeyCode.Character;
+            self.modifiers = build fletui::KeyModifiers {
+                self.shift = true;
+                self.alt = false;
+                self.control = true;
+            };
+            self.codepoint = 128578;
+        };
+    };
+
+    asserts::is_true(
+        t,
+        event.kind == fletui::EventKind.Key and
+            event.key.code == fletui::KeyCode.Character and
+            event.key.codepoint == 128578 and
+            event.key.modifiers.shift and !event.key.modifiers.alt and
+            event.key.modifiers.control and
+            event.size.columns == 0 and event.size.rows == 0,
+        "a key event retains its Unicode scalar and independent modifiers"
+    );
+}
+
+test resize_event_preserves_terminal_dimensions(&testing::UnitTest t) {
+    event := build fletui::Event {
+        self.kind = fletui::EventKind.Resize;
+        self.size = build fletui::Size {
+            self.columns = 120;
+            self.rows = 40;
+        };
+    };
+
+    asserts::is_true(
+        t,
+        event.kind == fletui::EventKind.Resize and
+            event.size.columns == 120 and event.size.rows == 40 and
+            event.key.code == fletui::KeyCode.Unknown and
+            event.key.codepoint == 0 and
+            !event.key.modifiers.shift and
+            !event.key.modifiers.alt and
+            !event.key.modifiers.control,
+        "a resize event retains its dimensions and leaves key data empty"
+    );
+}

@@ -1,0 +1,256 @@
+module fletui_test;
+under namespace root;
+
+@imports
+    :: root::fletui
+    :: lib::std::tests::asserts
+    :: lib::std::tests::testing;
+
+void assert_key_event(
+    &testing::UnitTest t,
+    fletui::Event actual,
+    fletui::KeyCode expectedCode,
+    u32 expectedCodepoint,
+    bool expectedShift,
+    bool expectedAlt,
+    bool expectedControl,
+    stringv message
+) {
+    asserts::is_true(
+        t,
+        actual.kind == fletui::EventKind.Key and
+            actual.key.code == expectedCode and
+            actual.key.codepoint == expectedCodepoint and
+            actual.key.modifiers.shift == expectedShift and
+            actual.key.modifiers.alt == expectedAlt and
+            actual.key.modifiers.control == expectedControl and
+            actual.size.columns == 0 and actual.size.rows == 0,
+        message
+    );
+}
+
+test key_event_builds_a_complete_key_payload(&testing::UnitTest t) {
+    event := fletui::key_event(
+        fletui::KeyCode.Character,
+        937,
+        build fletui::KeyModifiers {
+            self.shift = true;
+            self.alt = true;
+            self.control = false;
+        }
+    );
+
+    assert_key_event(
+        t,
+        event,
+        fletui::KeyCode.Character,
+        937,
+        true,
+        true,
+        false,
+        "key_event preserves its codepoint and every modifier"
+    );
+}
+
+test newline_and_carriage_return_decode_as_enter(&testing::UnitTest t) {
+    assert_key_event(
+        t,
+        fletui::decode_plain_key(10),
+        fletui::KeyCode.Enter,
+        0,
+        false,
+        false,
+        false,
+        "line feed decodes as Enter"
+    );
+    assert_key_event(
+        t,
+        fletui::decode_plain_key(13),
+        fletui::KeyCode.Enter,
+        0,
+        false,
+        false,
+        false,
+        "carriage return decodes as Enter"
+    );
+}
+
+test backspace_encodings_decode_as_backspace(&testing::UnitTest t) {
+    assert_key_event(
+        t,
+        fletui::decode_plain_key(8),
+        fletui::KeyCode.Backspace,
+        0,
+        false,
+        false,
+        false,
+        "BS decodes as Backspace"
+    );
+    assert_key_event(
+        t,
+        fletui::decode_plain_key(127),
+        fletui::KeyCode.Backspace,
+        0,
+        false,
+        false,
+        false,
+        "DEL decodes as Backspace"
+    );
+}
+
+test horizontal_tab_decodes_as_tab(&testing::UnitTest t) {
+    assert_key_event(
+        t,
+        fletui::decode_plain_key(9),
+        fletui::KeyCode.Tab,
+        0,
+        false,
+        false,
+        false,
+        "horizontal tab decodes as Tab"
+    );
+}
+
+test control_letter_boundaries_decode_as_lowercase_characters(
+    &testing::UnitTest t
+) {
+    assert_key_event(
+        t,
+        fletui::decode_plain_key(1),
+        fletui::KeyCode.Character,
+        97,
+        false,
+        false,
+        true,
+        "Ctrl+A decodes as a controlled lowercase a"
+    );
+    assert_key_event(
+        t,
+        fletui::decode_plain_key(26),
+        fletui::KeyCode.Character,
+        122,
+        false,
+        false,
+        true,
+        "Ctrl+Z decodes as a controlled lowercase z"
+    );
+}
+
+test printable_ascii_boundaries_preserve_their_codepoints(
+    &testing::UnitTest t
+) {
+    assert_key_event(
+        t,
+        fletui::decode_plain_key(32),
+        fletui::KeyCode.Character,
+        32,
+        false,
+        false,
+        false,
+        "space is the first printable ASCII character"
+    );
+    assert_key_event(
+        t,
+        fletui::decode_plain_key(126),
+        fletui::KeyCode.Character,
+        126,
+        false,
+        false,
+        false,
+        "tilde is the last printable ASCII character"
+    );
+}
+
+test unsupported_bytes_decode_as_no_event(&testing::UnitTest t) {
+    asserts::is_true(
+        t,
+        fletui::decode_plain_key(0) == none and
+            fletui::decode_plain_key(31) == none and
+            fletui::decode_plain_key(128) == none and
+            fletui::decode_plain_key(255) == none,
+        "NUL, non-letter controls, and non-ASCII bytes are ignored"
+    );
+}
+
+test escape_decodes_as_escape(&testing::UnitTest t) {
+    assert_key_event(
+        t,
+        fletui::decode_plain_key(27),
+        fletui::KeyCode.Escape,
+        0,
+        false,
+        false,
+        false,
+        "escape decodes as Escape"
+    );
+}
+
+test ansi_arrow_sequences_decode_as_navigation_keys(&testing::UnitTest t) {
+    [3]u8 up = [27, 91, 65];
+    [3]u8 down = [27, 91, 66];
+    [3]u8 right = [27, 91, 67];
+    [3]u8 left = [27, 91, 68];
+
+    assert_key_event(
+        t,
+        fletui::decode_escape_sequence(up[:]),
+        fletui::KeyCode.Up,
+        0,
+        false,
+        false,
+        false,
+        "CSI A decodes as Up"
+    );
+    assert_key_event(
+        t,
+        fletui::decode_escape_sequence(down[:]),
+        fletui::KeyCode.Down,
+        0,
+        false,
+        false,
+        false,
+        "CSI B decodes as Down"
+    );
+    assert_key_event(
+        t,
+        fletui::decode_escape_sequence(right[:]),
+        fletui::KeyCode.Right,
+        0,
+        false,
+        false,
+        false,
+        "CSI C decodes as Right"
+    );
+    assert_key_event(
+        t,
+        fletui::decode_escape_sequence(left[:]),
+        fletui::KeyCode.Left,
+        0,
+        false,
+        false,
+        false,
+        "CSI D decodes as Left"
+    );
+}
+
+test malformed_escape_sequences_decode_as_no_event(&testing::UnitTest t) {
+    [0]u8 empty = none;
+    [1]u8 escapeOnly = [27];
+    [2]u8 incompleteCsi = [27, 91];
+    [3]u8 missingEscape = [0, 91, 65];
+    [3]u8 wrongIntroducer = [27, 90, 65];
+    [3]u8 unknownFinal = [27, 91, 90];
+    [4]u8 trailingByte = [27, 91, 65, 0];
+
+    asserts::is_true(
+        t,
+        fletui::decode_escape_sequence(empty[:]) == none and
+            fletui::decode_escape_sequence(escapeOnly[:]) == none and
+            fletui::decode_escape_sequence(incompleteCsi[:]) == none and
+            fletui::decode_escape_sequence(missingEscape[:]) == none and
+            fletui::decode_escape_sequence(wrongIntroducer[:]) == none and
+            fletui::decode_escape_sequence(unknownFinal[:]) == none and
+            fletui::decode_escape_sequence(trailingByte[:]) == none,
+        "empty, incomplete, malformed, unknown, and oversized sequences are ignored"
+    );
+}

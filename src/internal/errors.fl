@@ -1,0 +1,13 @@
+module fletui;
+under namespace root;
+
+export error FletuiError {
+    NotATerminal,
+    OpenFailed,
+    SizeFailed,
+    WriteFailed,
+    ReadFailed,
+    Unsupported,
+    Closed
+}
+

@@ -1,0 +1,73 @@
+module fletui;
+under namespace root;
+
+Event key_event(KeyCode code, u32 codepoint, KeyModifiers modifiers) {
+    return build Event {
+        self.kind = EventKind.Key;
+        self.key = build KeyEvent {
+            self.code = code;
+            self.modifiers = modifiers;
+            self.codepoint = codepoint; 
+        };
+    };
+}
+
+Event decode_plain_key(u8 value) {
+    if value == 27 {
+        return key_event(KeyCode.Escape, 0, none);
+    }
+
+    if value == 10 or value == 13 {
+        return key_event(KeyCode.Enter, 0, none);
+    }
+
+    if value == 8 or value == 127 {
+        return key_event(KeyCode.Backspace, 0, none);
+    }
+
+    if value == 9 {
+        return key_event(KeyCode.Tab, 0, none);
+    }
+
+    // Raw terminals encode Ctrl+A through Ctrl+Z as bytes 1 through 26
+    if value >= 1 and value <= 26 {
+        return key_event(
+            KeyCode.Character,
+            value.cast<u32> + 96,
+            build KeyModifiers {
+                self.control = true;
+        });
+    }
+
+    if value >= 32 and value <= 126 {
+        return key_event(
+            KeyCode.Character,
+            value.cast<u32>,
+            none
+        );
+    }
+
+    return none;
+}
+
+Event decode_escape_sequence([]const u8 sequence) {
+    if sequence.len() != 3 or sequence[0] != 27 or
+        sequence[1] != 91 {
+        return none;
+    }
+
+    if sequence[2] == 65 {
+        return key_event(KeyCode.Up, 0, none);
+    }
+    if sequence[2] == 66 {
+        return key_event(KeyCode.Down, 0, none);
+    }
+    if sequence[2] == 67 {
+        return key_event(KeyCode.Right, 0, none);
+    }
+    if sequence[2] == 68 {
+        return key_event(KeyCode.Left, 0, none);
+    }
+
+    return none;
+}
