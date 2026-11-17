@@ -51,23 +51,101 @@ Event decode_plain_key(u8 value) {
 }
 
 Event decode_escape_sequence([]const u8 sequence) {
-    if sequence.len() != 3 or sequence[0] != 27 or
-        sequence[1] != 91 {
+    if sequence.len() < 3 or sequence[0] != 27 {
         return none;
     }
 
-    if sequence[2] == 65 {
-        return key_event(KeyCode.Up, 0, none);
+    // CSI and SS3 use the same final bytes for navigation keys
+    if sequence.len() == 3 {
+        if sequence[1] == 91 or sequence[1] == 79 {
+            return ansi_navigation_event(sequence[2]);
+        }
+
+        return none;
     }
-    if sequence[2] == 66 {
-        return key_event(KeyCode.Down, 0, none);
+
+    // Longer forms below are CSI-only
+    if sequence[1] != 91 {
+        return none;
     }
-    if sequence[2] == 67 {
-        return key_event(KeyCode.Right, 0, none);
+
+    if sequence.len() == 4 and sequence[3] == 126 {
+        return ansi_csi_tilde_event(sequence[2]);
     }
-    if sequence[2] == 68 {
-        return key_event(KeyCode.Left, 0, none);
+
+    // Modified navigation: CSI 1 ; modifier final-byte
+    if sequence.len() == 6 and sequence[2] == 49 and sequence[3] == 59 {
+        return ansi_csi_modified_event(sequence[4], sequence[5]);
     }
 
     return none;
+}
+
+Event ansi_csi_tilde_event(u8 parameter) {
+    if parameter == 49 {
+        return key_event(KeyCode.Home, 0, none);
+    }
+    if parameter == 50 {
+        return key_event(KeyCode.Insert, 0, none);
+    }
+    if parameter == 51 {
+        return key_event(KeyCode.Delete, 0, none);
+    }
+    if parameter == 52 {
+        return key_event(KeyCode.End, 0, none);
+    }
+    if parameter == 53 {
+        return key_event(KeyCode.PageUp, 0, none);
+    }
+    if parameter == 54 {
+        return key_event(KeyCode.PageDown, 0, none);
+    }
+
+    return none;
+}
+
+Event ansi_navigation_event(u8 finalByte) {
+    if finalByte == 65 {
+        return key_event(KeyCode.Up, 0, none);
+    }
+    if finalByte == 66 {
+        return key_event(KeyCode.Down, 0, none);
+    }
+    if finalByte == 67 {
+        return key_event(KeyCode.Right, 0, none);
+    }
+    if finalByte == 68 {
+        return key_event(KeyCode.Left, 0, none);
+    }
+    if finalByte == 72 {
+        return key_event(KeyCode.Home, 0, none);
+    }
+    if finalByte == 70 {
+        return key_event(KeyCode.End, 0, none);
+    }
+
+    return none;
+}
+
+Event ansi_csi_modified_event(u8 modifierByte, u8 finalByte) {
+    // Modifier values are ASCII '2' through '8'.
+    if modifierByte < 50 or modifierByte > 56 {
+        return none;
+    }
+
+    event := ansi_navigation_event(finalByte);
+    if event == none {
+        return none;
+    }
+
+    // ANSI modifier parameter minus one is a modifier bitset:
+    // bit 0 = Shift, bit 1 = Alt, bit 2 = Control.
+    u8 bits = modifierByte - 49;
+    event.key.modifiers = build KeyModifiers {
+        self.shift = (bits & 1) != 0;
+        self.alt = (bits & 2) != 0;
+        self.control = (bits & 4) != 0;
+    };
+
+    return event;
 }
