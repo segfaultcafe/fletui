@@ -55,9 +55,12 @@ Command Application::initialCommand(&const self) {
 }
 ```
 
-Flecha accepts zero `once func` values, comparisons with `none`, interface
-defaults, and interface methods returning values that own callables. A command
-is move-only and invoking it consumes it.
+This contract requires Flecha to accept `none` as the zero value of a callable.
+The `0.4` callable ABI already has an all-null representation, but the current
+semantic checker does not yet admit `none` as a callable initializer or return
+value. FletUI treats that as a required compiler capability. Invoking an empty
+callable must have defined checked-trap behavior rather than performing a null
+function-pointer call. A live command is move-only and invoking it consumes it.
 
 ## Application example
 

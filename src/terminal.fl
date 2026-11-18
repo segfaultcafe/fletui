@@ -1,14 +1,5 @@
 module fletui;
 
-export structure Size {
-    u16 columns;
-    u16 rows;
-};
-
-export structure Terminal {
-    private *void handle;
-};
-
 (Terminal, error) Terminal::open() {
     *void handle = null;
 

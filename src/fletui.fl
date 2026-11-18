@@ -1,5 +1,92 @@
 module fletui;
 
-export i32 answer() {
-    return 42;
+@imports
+    :: lib::std::time::duration as stdtime;
+
+// Size describes a terminal viewport in character cells.
+export structure Size {
+    u16 columns;
+    u16 rows;
+};
+
+// Terminal is an acquired process terminal.
+export structure Terminal {
+    private *void handle;
+};
+
+// EventKind identifies which payload of an Event is active.
+export enum EventKind: u8 {
+    default None,
+    Key,
+    Resize,
 }
+
+// Event contains data delivered to Application.update.
+export structure Event {
+    EventKind kind;
+    KeyEvent key;
+    Size size;
+};
+
+// KeyCode identifies a logical key independently of its terminal encoding.
+export enum KeyCode: u8 {
+    default Unknown,
+    Character,
+    Enter,
+    Escape,
+    Backspace,
+    Tab,
+    Up,
+    Down,
+    Left,
+    Right,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    Insert,
+    Delete,
+}
+
+// KeyModifiers records the independent modifiers held for a key event.
+export structure KeyModifiers {
+    bool shift, alt, control;
+};
+
+// KeyEvent describes one decoded logical key press.
+export structure KeyEvent {
+    KeyCode code;
+    KeyModifiers modifiers;
+    // Unicode scalar value when code is Character; zero for other key codes.
+    u32 codepoint;
+};
+
+// CommandContext provides the runtime operations available to a Command.
+export interface CommandContext {
+    // emit sends an event to the application.
+    error emit(&self, Event event) virtual;
+
+    // emitAfter sends an event to the application after a delay.
+    error emitAfter(&self, stdtime::Duration delay, Event event) virtual;
+
+    // requestQuit asks the application to exit.
+    void requestQuit(&self) virtual;
+};
+
+// View describes the terminal output produced by an Application.
+export structure View {};
+
+// Command is an operation run by FletUI. A none Command is a no-op.
+export once func Command(&CommandContext ctx) => (error);
+
+// Application contains a program's state and core functions.
+export interface Application {
+    // update handles an event and optionally returns a Command.
+    (Command, error) update(&self, Event event) virtual;
+    // view returns the current UI and is rendered after every update.
+    (View, error) view(&const self) virtual;
+
+    // initialCommand returns an optional Command to run at startup.
+    Command initialCommand(&const self) default;
+
+};

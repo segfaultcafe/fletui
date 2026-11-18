@@ -1,0 +1,6 @@
+module fletui;
+
+// Default initialCommand implementation
+Command Application::initialCommand(&const self) {
+    return none;
+}

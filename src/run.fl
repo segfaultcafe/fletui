@@ -1,0 +1,9 @@
+module fletui;
+
+@imports
+    :: lib::std::fmt;
+
+export error run(&Application app) {
+    fmt::eprintln("not implemented");
+    return none;
+}
