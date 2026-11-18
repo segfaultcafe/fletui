@@ -1,0 +1,11 @@
+module fletui;
+
+View View::from(stringv content) {
+    return build View {
+        self.contentValue = content.string();
+    }; 
+}
+
+stringv View::content(&const self) <-self {
+    return self->contentValue.view();
+}

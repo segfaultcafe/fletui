@@ -74,7 +74,9 @@ export interface CommandContext {
 };
 
 // View describes the terminal output produced by an Application.
-export structure View {};
+export structure View {
+    private string contentValue;
+};
 
 // Command is an operation run by FletUI. A none Command is a no-op.
 export once func Command(&CommandContext ctx) => (error);
@@ -88,5 +90,4 @@ export interface Application {
 
     // initialCommand returns an optional Command to run at startup.
     Command initialCommand(&const self) default;
-
 };

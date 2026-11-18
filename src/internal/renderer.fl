@@ -1,0 +1,36 @@
+module fletui;
+under namespace root;
+
+@imports
+    :: lib::std::text::strings;
+
+const u8 TOP_LEFT = 27;
+
+(string, error) render_frame(&const View view) {
+    builder := strings::StringBuilder::init();
+    
+    // Move the cursor to the top-left
+    try builder.appendChar(TOP_LEFT as char);
+    try builder.append("[H");
+    content := view->content();
+    loop u32 i = 0; i < content.len(); i++ {
+        char value = content[i];
+
+        // Raw mode disables OPOST, so normalize LF to CRLF
+        if value == '\n' and (i == 0 or content[i-1] != '\r') {
+            try builder.appendChar('\r');
+        }
+
+        try builder.appendChar(value);
+    }
+
+    // Clear everything remaining after the rendered frame
+    try builder.appendChar(TOP_LEFT as char);
+    try builder.append("[J");
+    return builder.toString();
+}
+
+error render(&const Terminal terminal, &const View view) {
+    frame := try render_frame(view);
+    return terminal->writeAll(frame.view());
+}
