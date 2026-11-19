@@ -12,6 +12,7 @@ export structure Size {
 // Terminal is an acquired process terminal.
 export structure Terminal {
     private *void handle;
+    private Decoder decoder;
 };
 
 // EventKind identifies which payload of an Event is active.

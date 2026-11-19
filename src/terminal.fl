@@ -1,8 +1,12 @@
 module fletui;
 
+const i32 ESCAPE_TIMEOUT_MS = 25;
+const i32 WAIT_INDEFINITELY = -1;
+
+// Acquires the process terminal, enables raw mode, and initializes its input
+// decoder. The returned Terminal owns the native handle until teardown.
 (Terminal, error) Terminal::open() {
     *void handle = null;
-
     unsafe {
         i32 status = fletui_v1_terminal_open(&raw handle);
         try error_from_status(status, FletuiError.OpenFailed);
@@ -10,40 +14,34 @@ module fletui;
 
     return (build Terminal {
         self.handle = handle;
+        self.decoder = Decoder::init();
     }, none);
 }
 
-Terminal Terminal::zero() override {
-    return build Terminal {
-        self.handle = null;
-    };
-}
-
+// Restores the terminal state and releases its native handle. Tearing down an
+// already closed Terminal has no effect.
 void Terminal::tear(&self) override {
     if self->handle == null {
         return;
     }
-    
+
     *void handle = self->handle;
     self->handle = null;
-
     unsafe {
         fletui_v1_terminal_close(handle);
     }
 }
 
+// Reports whether this Terminal currently owns an open native handle.
 bool Terminal::isOpen(&const self) {
     return self->handle != null;
 }
 
+// Returns the terminal viewport dimensions in character cells.
 (Size, error) Terminal::size(&const self) {
-    if self->handle == null {
-        return (none, FletuiError.Closed);
-    }
-
+    try self->healthCheck();
     u16 columns = 0;
     u16 rows = 0;
-
     unsafe {
         i32 status = fletui_v1_terminal_size(
             self->handle,
@@ -59,11 +57,9 @@ bool Terminal::isOpen(&const self) {
     }, none);
 }
 
+// Writes the complete source string to the terminal output.
 error Terminal::writeAll(&const self, stringv source) {
-    if self->handle == null {
-        return FletuiError.Closed;
-    }
-
+    try self->healthCheck();
     unsafe {
         i32 status = fletui_v1_terminal_write_all(
             self->handle,
@@ -76,11 +72,80 @@ error Terminal::writeAll(&const self, stringv source) {
     return none;
 }
 
-(usize, error) Terminal::read(&const self, []u8 destination) {
-    if self->handle == null {
-        return (none, FletuiError.Closed);
+// Blocks until the next complete terminal event is available. Malformed input
+// is consumed and skipped, while incomplete input remains buffered.
+(Event, error) Terminal::readEvent(&self) {
+    try self->healthCheck();
+    [256]u8 input;
+    while true {
+        event, decodeErr := self->decoder.nextEvent();
+        if decodeErr == DecodeError.InvalidInput {
+            proceed;
+        }
+
+        if decodeErr != none {
+            return (none, decodeErr);
+        }
+
+        if event != none {
+            return (event, none);
+        }
+
+        i32 timeoutMs = WAIT_INDEFINITELY;
+        if self->decoder.hasPendingEscape() {
+            timeoutMs = ESCAPE_TIMEOUT_MS;
+        }
+
+        readable := try self->poll(timeoutMs);
+        if !readable {
+            event, flushErr := self->decoder.flushEscape();
+            if flushErr == DecodeError.InvalidInput {
+                proceed;
+            }
+
+            if flushErr != none {
+                return (none, flushErr);
+            }
+
+            if event != none {
+                return (event, none);
+            }
+
+            proceed;
+        }
+
+        bytesRead := try self->read(input[:]);
+        if bytesRead == 0 {
+            return (none, FletuiError.ReadFailed);
+        }
+
+        try self->decoder.feed(input[:bytesRead]);
+    }
+}
+
+// Waits until input becomes readable or timeoutMs elapses. A timeout of -1
+// waits indefinitely; zero checks without blocking.
+private (bool, error) Terminal::poll(&const self, i32 timeoutMs) {
+    try self->healthCheck();
+
+    u8 ready = 0;
+    unsafe {
+        i32 status = fletui_v1_terminal_poll(
+            self->handle,
+            timeoutMs,
+            &raw ready
+        );
+
+        try error_from_status(status, FletuiError.PollFailed);
     }
 
+    return (ready != 0, none);
+}
+
+// Reads the bytes currently available without blocking. This stays private so
+// raw reads cannot bypass and desynchronize the persistent event decoder.
+private (usize, error) Terminal::read(&const self, []u8 destination) {
+    try self->healthCheck();
     usize bytesRead = 0;
     unsafe {
         i32 status = fletui_v1_terminal_read(
@@ -94,4 +159,13 @@ error Terminal::writeAll(&const self, stringv source) {
     }
 
     return (bytesRead, none);
+}
+
+// Rejects operations on a Terminal that does not own a native handle.
+private error Terminal::healthCheck(&const self) {
+    if self->handle == null {
+        return FletuiError.Closed;
+    }
+
+    return none;
 }

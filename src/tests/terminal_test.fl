@@ -1,0 +1,103 @@
+module fletui_test;
+under namespace root;
+
+@imports
+    :: root::fletui
+    :: lib::std::tests::asserts
+    :: lib::std::tests::testing;
+
+test zero_terminal_is_closed(&testing::UnitTest t) {
+    fletui::Terminal terminal = none;
+
+    asserts::is_false(
+        t,
+        terminal.isOpen(),
+        "a zero Terminal is closed"
+    );
+
+}
+
+test closed_terminal_rejects_size_queries(&testing::UnitTest t) {
+    fletui::Terminal terminal = none;
+
+    size, sizeError := terminal.size();
+
+    asserts::is_none(
+        t,
+        &size,
+        "a closed Terminal returns no size"
+    );
+    asserts::has_error_variant(
+        t,
+        sizeError,
+        fletui::FletuiError.Closed,
+        "a closed Terminal reports Closed from size"
+    );
+}
+
+test closed_terminal_rejects_writes(&testing::UnitTest t) {
+    fletui::Terminal terminal = none;
+
+    writeError := terminal.writeAll("hello");
+
+    asserts::has_error_variant(
+        t,
+        writeError,
+        fletui::FletuiError.Closed,
+        "a closed Terminal reports Closed from writeAll"
+    );
+}
+
+test closed_terminal_rejects_event_reads(&testing::UnitTest t) {
+    fletui::Terminal terminal = none;
+
+    event, readError := terminal.readEvent();
+
+    asserts::is_none(
+        t,
+        &event,
+        "a closed Terminal returns no event"
+    );
+    asserts::has_error_variant(
+        t,
+        readError,
+        fletui::FletuiError.Closed,
+        "a closed Terminal reports Closed from readEvent"
+    );
+}
+
+test closed_terminal_rejects_internal_input_operations(
+    &testing::UnitTest t
+) {
+    fletui::Terminal terminal = none;
+    [1]u8 input = none;
+
+    ready, pollError := terminal.poll(0);
+    bytesRead, readError := terminal.read(input[:]);
+
+    asserts::is_false(
+        t,
+        ready,
+        "a closed Terminal is not readable"
+    );
+    asserts::has_error_variant(
+        t,
+        pollError,
+        fletui::FletuiError.Closed,
+        "a closed Terminal reports Closed from poll"
+    );
+
+    usize expectedBytesRead = 0;
+    asserts::numeric_equal<usize>(
+        t,
+        &bytesRead,
+        &expectedBytesRead,
+        "a closed Terminal reads no bytes"
+    );
+    asserts::has_error_variant(
+        t,
+        readError,
+        fletui::FletuiError.Closed,
+        "a closed Terminal reports Closed from raw read"
+    );
+}
