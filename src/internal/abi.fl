@@ -8,6 +8,9 @@ foreign c {
     #include <sys/ioctl.h>
     #include <termios.h>
     #include <unistd.h>
+    #include <poll.h>
+    #include <fcntl.h>
+    #include <signal.h>
 
     typedef enum {
         FLETUI_STATUS_OK = 0,
@@ -17,14 +20,156 @@ foreign c {
         FLETUI_STATUS_IO_ERROR = 4,
         FLETUI_STATUS_UNSUPPORTED = 5,
         FLETUI_STATUS_INVALID_SIZE = 6,
+        FLETUI_STATUS_ALREADY_OPEN = 7,
     } FletuiStatus;
 
     typedef struct {
         struct termios original;
+        struct sigaction original_sigwinch;
         int input_fd;
         int output_fd;
+        int resize_read_fd;
+        int resize_write_fd;
+        int sigwinch_installed;
         int active;
     } FletuiTerminal;
+
+    static volatile sig_atomic_t fletui_v1_resize_write_fd = -1;
+
+    static void fletui_v1_sigwinch_handler(int signal_number) {
+        (void)signal_number;
+
+        int saved_errno = errno;
+        int descriptor = (int)fletui_v1_resize_write_fd;
+
+        if (descriptor >= 0) {
+            uint8_t notification = 1;
+            (void)write(descriptor, &notification, 1);
+        }
+
+        errno = saved_errno;
+    }
+
+    static int fletui_v1_configure_pipe_fd(int descriptor) {
+        int status_flags = fcntl(descriptor, F_GETFL, 0);
+        if (
+            status_flags < 0 ||
+            fcntl(
+                descriptor,
+                F_SETFL,
+                status_flags | O_NONBLOCK
+            ) != 0
+        ) {
+            return -1;
+        }
+
+        int descriptor_flags = fcntl(descriptor, F_GETFD, 0);
+        if (
+            descriptor_flags < 0 ||
+            fcntl(
+                descriptor,
+                F_SETFD,
+                descriptor_flags | FD_CLOEXEC
+            ) != 0
+        ) {
+            return -1;
+        }
+
+        return 0;
+    }
+
+    static void fletui_v1_close_resize_pipe(FletuiTerminal *terminal) {
+        if (terminal->resize_read_fd >= 0) {
+            close(terminal->resize_read_fd);
+            terminal->resize_read_fd = -1;
+        }
+
+        if (terminal->resize_write_fd >= 0) {
+            close(terminal->resize_write_fd);
+            terminal->resize_write_fd = -1;
+        }
+    }
+
+    static int32_t fletui_v1_start_resize_notifications(
+        FletuiTerminal *terminal
+    ) {
+        if (fletui_v1_resize_write_fd >= 0) {
+            return FLETUI_STATUS_ALREADY_OPEN;
+        }
+
+        int descriptor[2] = {-1, -1};
+        if (pipe(descriptor) != 0) {
+            return FLETUI_STATUS_IO_ERROR;
+        }
+
+        terminal->resize_read_fd = descriptor[0];
+        terminal->resize_write_fd = descriptor[1];
+        if (
+            fletui_v1_configure_pipe_fd(
+                terminal->resize_read_fd
+            ) != 0 ||
+            fletui_v1_configure_pipe_fd(
+                terminal->resize_write_fd
+            ) != 0
+        ) {
+            fletui_v1_close_resize_pipe(terminal);
+            return FLETUI_STATUS_IO_ERROR;
+        }
+
+        struct sigaction action = {0};
+        action.sa_handler = fletui_v1_sigwinch_handler;
+        action.sa_flags = SA_RESTART;
+        sigemptyset(&action.sa_mask);
+
+        fletui_v1_resize_write_fd = terminal->resize_write_fd;
+        if (sigaction(SIGWINCH, &action, &terminal->original_sigwinch) != 0) {
+            fletui_v1_resize_write_fd = -1;
+            fletui_v1_close_resize_pipe(terminal);
+            return FLETUI_STATUS_IO_ERROR;
+        }
+
+        terminal->sigwinch_installed = 1;
+        return FLETUI_STATUS_OK;
+    }
+    static int32_t fletui_v1_stop_resize_notifications(
+        FletuiTerminal *terminal
+    ) {
+        int32_t status = FLETUI_STATUS_OK;
+
+        if (terminal->sigwinch_installed) {
+            fletui_v1_resize_write_fd = -1;
+
+            if (
+                sigaction(
+                    SIGWINCH,
+                    &terminal->original_sigwinch,
+                    NULL
+                ) != 0
+            ) {
+                status = FLETUI_STATUS_IO_ERROR;
+            }
+
+            terminal->sigwinch_installed = 0;
+        }
+
+        if (
+            terminal->resize_read_fd >= 0 &&
+            close(terminal->resize_read_fd) != 0
+        ) {
+            status = FLETUI_STATUS_IO_ERROR;
+        }
+        terminal->resize_read_fd = -1;
+
+        if (
+            terminal->resize_write_fd >= 0 &&
+            close(terminal->resize_write_fd) != 0
+        ) {
+            status = FLETUI_STATUS_IO_ERROR;
+        }
+        terminal->resize_write_fd = -1;
+
+        return status;
+    }
 
     int32_t fletui_v1_terminal_open(void **output) {
         if (output == NULL) {
@@ -43,16 +188,25 @@ foreign c {
 
         terminal->input_fd = STDIN_FILENO;
         terminal->output_fd = STDOUT_FILENO;
+        terminal->resize_read_fd = -1;
+        terminal->resize_write_fd = -1;
 
         if (tcgetattr(terminal->input_fd, &terminal->original) != 0) {
             int saved_errno = errno;
             free(terminal);
-            
+
             if (saved_errno == ENOTTY) {
                 return FLETUI_STATUS_NOT_A_TERMINAL;
             }
 
             return FLETUI_STATUS_IO_ERROR;
+        }
+
+        int32_t resize_status =
+            fletui_v1_start_resize_notifications(terminal);
+        if (resize_status != FLETUI_STATUS_OK) {
+            free(terminal);
+            return resize_status;
         }
 
         struct termios raw = terminal->original;
@@ -64,6 +218,7 @@ foreign c {
         raw.c_cc[VTIME] = 0;
 
         if (tcsetattr(terminal->input_fd, TCSAFLUSH, &raw) != 0) {
+            fletui_v1_stop_resize_notifications(terminal);
             free(terminal);
             return FLETUI_STATUS_IO_ERROR;
         }
@@ -92,6 +247,12 @@ foreign c {
             terminal->active = 0;
         }
 
+        if (
+            fletui_v1_stop_resize_notifications(terminal) !=
+            FLETUI_STATUS_OK
+        ) {
+            status = FLETUI_STATUS_IO_ERROR;
+        }
         free(terminal);
         return status;
     }
@@ -183,6 +344,56 @@ foreign c {
             }
 
             *bytes_read = (size_t)count;
+            return FLETUI_STATUS_OK;
+        }
+    }
+
+    int32_t fletui_v1_terminal_poll(
+        void *opaque,
+        int32_t timeout_ms,
+        uint8_t *ready
+    ) {
+        FletuiTerminal *terminal = opaque;
+
+        if (terminal == NULL || ready == NULL || timeout_ms < -1) {
+            return FLETUI_STATUS_INVALID_ARGUMENT;
+        }
+
+        *ready = 0;
+
+        struct pollfd descriptor = {
+            .fd = terminal->input_fd,
+            .events = POLLIN,
+            .revents = 0,
+        };
+
+        for (;;) {
+            int result = poll(&descriptor, 1, timeout_ms);
+            if (result < 0 && errno == EINTR) {
+                continue;
+            }
+
+            if (result < 0) {
+                return FLETUI_STATUS_IO_ERROR;
+            }
+
+            if (result == 0) {
+                return FLETUI_STATUS_OK;
+            }
+
+            if ((descriptor.revents & POLLIN) != 0) {
+                *ready = 1;
+                return FLETUI_STATUS_OK;
+            }
+
+            if (
+                (descriptor.revents & POLLERR) != 0 ||
+                (descriptor.revents & POLLHUP) != 0 ||
+                (descriptor.revents & POLLNVAL) != 0
+            ) {
+                return FLETUI_STATUS_IO_ERROR;
+            }
+
             return FLETUI_STATUS_OK;
         }
     }

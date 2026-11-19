@@ -28,3 +28,11 @@ extern unsafe i32 fletui_v1_terminal_read(
     usize capacity,
     *usize bytes_read
 );
+
+// Waits until terminal input is readable or timeout_ms elapses.
+// A timeout of -1 waits indefinitely; zero performs an immediate check.
+extern unsafe i32 fletui_v1_terminal_poll(
+    *void handle,
+    i32 timeout_ms,
+    *u8 ready
+);
