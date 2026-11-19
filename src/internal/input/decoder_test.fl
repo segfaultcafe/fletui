@@ -16,15 +16,52 @@ void assert_key_event(
     bool expectedControl,
     stringv message
 ) {
-    asserts::is_true(
+    t->recordAssertion(
+        actual.kind == fletui::EventKind.Key,
+        "event.kind == EventKind.Key",
+        message
+    );
+
+    t->recordAssertion(
+        actual.key.code == expectedCode,
+        "event.key.code == expectedCode",
+        message
+    );
+
+    asserts::numeric_equal<u32>(
         t,
-        actual.kind == fletui::EventKind.Key and
-            actual.key.code == expectedCode and
-            actual.key.codepoint == expectedCodepoint and
-            actual.key.modifiers.shift == expectedShift and
-            actual.key.modifiers.alt == expectedAlt and
-            actual.key.modifiers.control == expectedControl and
-            actual.size.columns == 0 and actual.size.rows == 0,
+        &actual.key.codepoint,
+        &expectedCodepoint,
+        message
+    );
+
+    t->recordAssertion(
+        actual.key.modifiers.shift == expectedShift,
+        "key.modifiers.shift matches expectedShift",
+        message
+    );
+    t->recordAssertion(
+        actual.key.modifiers.alt == expectedAlt,
+        "key.modifiers.alt matches expectedAlt",
+        message
+    );
+    t->recordAssertion(
+        actual.key.modifiers.control == expectedControl,
+        "key.modifiers.control matches expectedControl",
+        message
+    );
+
+    u16 expectedDimension = 0;
+    asserts::numeric_equal<u16>(
+        t,
+        &actual.size.columns,
+        &expectedDimension,
+        message
+    );
+    asserts::numeric_equal<u16>(
+        t,
+        &actual.size.rows,
+        &expectedDimension,
         message
     );
 }
@@ -434,5 +471,633 @@ test modified_csi_arrows_decode_with_their_modifiers(
         true,
         true,
         "CSI 1;8 B decodes as Shift+Alt+Ctrl+Down"
+    );
+}
+
+test decoder_starts_with_an_empty_buffer(&testing::UnitTest t) {
+    decoder := fletui::Decoder::init();
+    asserts::is_true(
+        t,
+        decoder.bufferedLen() == 0 and decoder.pending().len() == 0,
+        "a new decoder has no pending input"
+    );
+}
+
+test decoder_feed_owns_the_input_bytes(&testing::UnitTest t) {
+    decoder := fletui::Decoder::init();
+    [2]u8 input = [27, 91];
+
+    feedErr := decoder.feed(input[:]);
+    input[0] = 0;
+    pending := decoder.pending();
+
+    asserts::is_true(
+        t,
+        feedErr == none and
+            decoder.bufferedLen() == 2 and
+            pending[0] == 27 and pending[1] == 91,
+        "feed copies input into decoder-owned storage"
+    );
+}
+
+test decoder_feed_appends_chunks_in_order(&testing::UnitTest t) {
+    decoder := fletui::Decoder::init();
+    [2]u8 first = [27, 91];
+    [1]u8 second = [65];
+
+    firstError := decoder.feed(first[:]);
+    secondError := decoder.feed(second[:]);
+    pending := decoder.pending();
+
+    asserts::is_true(
+        t,
+        firstError == none and secondError == none and
+            decoder.bufferedLen() == 3 and
+            pending[0] == 27 and
+            pending[1] == 91 and
+            pending[2] == 65,
+        "feed preserves byte order across chunks"
+    );
+}
+
+test decoder_feed_accepts_an_empty_chunk(&testing::UnitTest t) {
+    decoder := fletui::Decoder::init();
+    [0]u8 empty = none;
+
+    feedError := decoder.feed(empty[:]);
+
+    asserts::is_true(
+        t,
+        feedError == none and decoder.bufferedLen() == 0,
+        "feeding an empty chunk leaves the decoder empty"
+    );
+}
+
+test decoder_next_event_needs_input_when_empty(&testing::UnitTest t) {
+    decoder := fletui::Decoder::init();
+
+    event, decodeError := decoder.nextEvent();
+
+    asserts::is_true(
+        t,
+        event == none and decodeError == none and
+            decoder.bufferedLen() == 0,
+        "an empty decoder produces no event and no error"
+    );
+}
+
+test decoder_next_event_decodes_and_consumes_plain_ascii(
+    &testing::UnitTest t
+) {
+    decoder := fletui::Decoder::init();
+    [1]u8 input = [97];
+
+    feedError := decoder.feed(input[:]);
+    event, decodeError := decoder.nextEvent();
+
+    asserts::is_true(
+        t,
+        feedError == none and decodeError == none and
+            decoder.bufferedLen() == 0,
+        "a decoded ASCII byte is consumed"
+    );
+    assert_key_event(
+        t,
+        event,
+        fletui::KeyCode.Character,
+        97,
+        false,
+        false,
+        false,
+        "plain ASCII produces a character event"
+    );
+}
+
+test decoder_next_event_returns_multiple_buffered_events(
+    &testing::UnitTest t
+) {
+    decoder := fletui::Decoder::init();
+    [2]u8 input = [97, 98];
+
+    feedError := decoder.feed(input[:]);
+    first, firstError := decoder.nextEvent();
+    second, secondError := decoder.nextEvent();
+    remaining, remainingError := decoder.nextEvent();
+
+    asserts::is_true(
+        t,
+        feedError == none and
+            firstError == none and secondError == none and
+            remainingError == none and remaining == none and
+            decoder.bufferedLen() == 0,
+        "successive calls drain buffered events in order"
+    );
+    assert_key_event(
+        t,
+        first,
+        fletui::KeyCode.Character,
+        97,
+        false,
+        false,
+        false,
+        "the first buffered byte is decoded first"
+    );
+    assert_key_event(
+        t,
+        second,
+        fletui::KeyCode.Character,
+        98,
+        false,
+        false,
+        false,
+        "the second buffered byte is decoded second"
+    );
+}
+
+test decoder_next_event_consumes_invalid_ascii_and_recovers(
+    &testing::UnitTest t
+) {
+    decoder := fletui::Decoder::init();
+    [2]u8 input = [0, 113];
+
+    feedError := decoder.feed(input[:]);
+    invalidEvent, invalidError := decoder.nextEvent();
+    validEvent, validError := decoder.nextEvent();
+
+    asserts::is_true(
+        t,
+        feedError == none and
+            invalidEvent == none and
+            invalidError == fletui::DecodeError.InvalidInput and
+            validError == none and decoder.bufferedLen() == 0,
+        "invalid input is consumed without blocking later events"
+    );
+    assert_key_event(
+        t,
+        validEvent,
+        fletui::KeyCode.Character,
+        113,
+        false,
+        false,
+        false,
+        "valid input following an invalid byte is decoded"
+    );
+}
+
+test decoder_keeps_a_standalone_escape_pending(&testing::UnitTest t) {
+    decoder := fletui::Decoder::init();
+    [1]u8 input = [27];
+
+    feedError := decoder.feed(input[:]);
+    event, decodeError := decoder.nextEvent();
+
+    asserts::is_true(
+        t,
+        feedError == none and event == none and decodeError == none and
+            decoder.bufferedLen() == 1,
+        "Escape remains pending because it may begin an ANSI sequence"
+    );
+}
+
+test decoder_keeps_a_utf8_leading_byte_pending(&testing::UnitTest t) {
+    decoder := fletui::Decoder::init();
+    [1]u8 input = [240];
+
+    feedError := decoder.feed(input[:]);
+    event, decodeError := decoder.nextEvent();
+
+    asserts::is_true(
+        t,
+        feedError == none and event == none and decodeError == none and
+            decoder.bufferedLen() == 1,
+        "a UTF-8 leading byte remains pending until decoding is implemented"
+    );
+}
+
+test decoder_waits_for_a_fragmented_csi_sequence(
+    &testing::UnitTest t
+) {
+    decoder := fletui::Decoder::init();
+    [1]u8 escape = [27];
+    [1]u8 introducer = [91];
+    [1]u8 finalByte = [65];
+
+    firstFeedError := decoder.feed(escape[:]);
+    firstEvent, firstDecodeError := decoder.nextEvent();
+
+    secondFeedError := decoder.feed(introducer[:]);
+    secondEvent, secondDecodeError := decoder.nextEvent();
+
+    thirdFeedError := decoder.feed(finalByte[:]);
+    finalEvent, finalDecodeError := decoder.nextEvent();
+
+    asserts::is_true(
+        t,
+        firstFeedError == none and secondFeedError == none and
+            thirdFeedError == none and
+            firstEvent == none and firstDecodeError == none and
+            secondEvent == none and secondDecodeError == none and
+            finalDecodeError == none and
+            decoder.bufferedLen() == 0,
+        "a CSI sequence remains buffered until its final byte arrives"
+    );
+    assert_key_event(
+        t,
+        finalEvent,
+        fletui::KeyCode.Up,
+        0,
+        false,
+        false,
+        false,
+        "fragmented CSI A decodes as Up"
+    );
+}
+
+test decoder_waits_for_a_fragmented_modified_csi_sequence(
+    &testing::UnitTest t
+) {
+    decoder := fletui::Decoder::init();
+    [3]u8 first = [27, 91, 49];
+    [2]u8 second = [59, 53];
+    [1]u8 third = [68];
+
+    firstFeedError := decoder.feed(first[:]);
+    firstEvent, firstDecodeError := decoder.nextEvent();
+
+    secondFeedError := decoder.feed(second[:]);
+    secondEvent, secondDecodeError := decoder.nextEvent();
+
+    thirdFeedError := decoder.feed(third[:]);
+    finalEvent, finalDecodeError := decoder.nextEvent();
+
+    asserts::is_true(
+        t,
+        firstFeedError == none and secondFeedError == none and
+            thirdFeedError == none and
+            firstEvent == none and firstDecodeError == none and
+            secondEvent == none and secondDecodeError == none and
+            finalDecodeError == none and
+            decoder.bufferedLen() == 0,
+        "modified CSI input remains buffered across arbitrary chunks"
+    );
+    assert_key_event(
+        t,
+        finalEvent,
+        fletui::KeyCode.Left,
+        0,
+        false,
+        false,
+        true,
+        "fragmented CSI 1;5 D decodes as Control+Left"
+    );
+}
+
+test decoder_decodes_ss3_and_preserves_following_input(
+    &testing::UnitTest t
+) {
+    decoder := fletui::Decoder::init();
+    [4]u8 input = [27, 79, 65, 120];
+
+    feedError := decoder.feed(input[:]);
+    upEvent, upError := decoder.nextEvent();
+    characterEvent, characterError := decoder.nextEvent();
+
+    asserts::is_true(
+        t,
+        feedError == none and upError == none and
+            characterError == none and decoder.bufferedLen() == 0,
+        "SS3 consumes only its own bytes"
+    );
+    assert_key_event(
+        t,
+        upEvent,
+        fletui::KeyCode.Up,
+        0,
+        false,
+        false,
+        false,
+        "SS3 A decodes as Up"
+    );
+    assert_key_event(
+        t,
+        characterEvent,
+        fletui::KeyCode.Character,
+        120,
+        false,
+        false,
+        false,
+        "input following SS3 remains available"
+    );
+}
+
+test decoder_rejects_unknown_csi_and_recovers(
+    &testing::UnitTest t
+) {
+    decoder := fletui::Decoder::init();
+    [4]u8 input = [27, 91, 90, 113];
+
+    feedError := decoder.feed(input[:]);
+    invalidEvent, invalidError := decoder.nextEvent();
+    validEvent, validError := decoder.nextEvent();
+
+    asserts::is_true(
+        t,
+        feedError == none and invalidEvent == none and
+            invalidError == fletui::DecodeError.InvalidInput and
+            validError == none and decoder.bufferedLen() == 0,
+        "an unknown complete CSI sequence is consumed before recovery"
+    );
+    assert_key_event(
+        t,
+        validEvent,
+        fletui::KeyCode.Character,
+        113,
+        false,
+        false,
+        false,
+        "plain input following unknown CSI is preserved"
+    );
+}
+
+test decoder_decodes_multibyte_utf8_code_points(
+    &testing::UnitTest t
+) {
+    decoder := fletui::Decoder::init();
+    [9]u8 input = [
+        194, 162,
+        226, 130, 172,
+        240, 159, 153, 130,
+    ];
+
+    feedError := decoder.feed(input[:]);
+    cent, centError := decoder.nextEvent();
+    euro, euroError := decoder.nextEvent();
+    smile, smileError := decoder.nextEvent();
+
+    asserts::is_true(
+        t,
+        feedError == none and
+            centError == none and
+            euroError == none and
+            smileError == none and
+            decoder.bufferedLen() == 0,
+        "complete UTF-8 code points are consumed independently"
+    );
+    assert_key_event(
+        t,
+        cent,
+        fletui::KeyCode.Character,
+        162,
+        false,
+        false,
+        false,
+        "two-byte UTF-8 decodes to U+00A2"
+    );
+    assert_key_event(
+        t,
+        euro,
+        fletui::KeyCode.Character,
+        8364,
+        false,
+        false,
+        false,
+        "three-byte UTF-8 decodes to U+20AC"
+    );
+    assert_key_event(
+        t,
+        smile,
+        fletui::KeyCode.Character,
+        128578,
+        false,
+        false,
+        false,
+        "four-byte UTF-8 decodes to U+1F642"
+    );
+}
+
+test decoder_waits_for_fragmented_utf8(
+    &testing::UnitTest t
+) {
+    decoder := fletui::Decoder::init();
+    [1]u8 first = [240];
+    [2]u8 middle = [159, 153];
+    [1]u8 last = [130];
+
+    firstFeedError := decoder.feed(first[:]);
+    firstEvent, firstDecodeError := decoder.nextEvent();
+
+    middleFeedError := decoder.feed(middle[:]);
+    middleEvent, middleDecodeError := decoder.nextEvent();
+
+    lastFeedError := decoder.feed(last[:]);
+    finalEvent, finalDecodeError := decoder.nextEvent();
+
+    asserts::is_true(
+        t,
+        firstFeedError == none and
+            middleFeedError == none and
+            lastFeedError == none and
+            firstEvent == none and firstDecodeError == none and
+            middleEvent == none and middleDecodeError == none and
+            finalDecodeError == none and
+            decoder.bufferedLen() == 0,
+        "fragmented UTF-8 remains buffered until complete"
+    );
+    assert_key_event(
+        t,
+        finalEvent,
+        fletui::KeyCode.Character,
+        128578,
+        false,
+        false,
+        false,
+        "the completed fragmented sequence decodes to U+1F642"
+    );
+}
+
+test decoder_rejects_invalid_utf8_and_preserves_following_ascii(
+    &testing::UnitTest t
+) {
+    decoder := fletui::Decoder::init();
+    [3]u8 input = [226, 40, 113];
+
+    feedError := decoder.feed(input[:]);
+    invalidEvent, invalidError := decoder.nextEvent();
+    parenthesis, parenthesisError := decoder.nextEvent();
+    character, characterError := decoder.nextEvent();
+
+    asserts::is_true(
+        t,
+        feedError == none and
+            invalidEvent == none and
+            invalidError == fletui::DecodeError.InvalidInput and
+            parenthesisError == none and
+            characterError == none and
+            decoder.bufferedLen() == 0,
+        "invalid UTF-8 consumes only its leading byte"
+    );
+    assert_key_event(
+        t,
+        parenthesis,
+        fletui::KeyCode.Character,
+        40,
+        false,
+        false,
+        false,
+        "ASCII following an invalid UTF-8 lead byte is preserved"
+    );
+    assert_key_event(
+        t,
+        character,
+        fletui::KeyCode.Character,
+        113,
+        false,
+        false,
+        false,
+        "later ASCII remains decodable after UTF-8 recovery"
+    );
+}
+
+test decoder_decodes_alt_ascii_and_control_keys(
+    &testing::UnitTest t
+) {
+    decoder := fletui::Decoder::init();
+    [4]u8 input = [27, 120, 27, 1];
+
+    feedError := decoder.feed(input[:]);
+    altX, altXError := decoder.nextEvent();
+    altControlA, altControlAError := decoder.nextEvent();
+
+    asserts::is_true(
+        t,
+        feedError == none and
+            altXError == none and altControlAError == none and
+            decoder.bufferedLen() == 0,
+        "Alt sequences consume Escape and their key byte"
+    );
+    assert_key_event(
+        t,
+        altX,
+        fletui::KeyCode.Character,
+        120,
+        false,
+        true,
+        false,
+        "Escape followed by x decodes as Alt+x"
+    );
+    assert_key_event(
+        t,
+        altControlA,
+        fletui::KeyCode.Character,
+        97,
+        false,
+        true,
+        true,
+        "Escape followed by Ctrl+A preserves both modifiers"
+    );
+}
+
+test decoder_waits_for_fragmented_alt_utf8(
+    &testing::UnitTest t
+) {
+    decoder := fletui::Decoder::init();
+    [3]u8 first = [27, 240, 159];
+    [2]u8 second = [153, 130];
+
+    firstFeedError := decoder.feed(first[:]);
+    pendingEvent, pendingError := decoder.nextEvent();
+
+    secondFeedError := decoder.feed(second[:]);
+    finalEvent, finalError := decoder.nextEvent();
+
+    asserts::is_true(
+        t,
+        firstFeedError == none and secondFeedError == none and
+            pendingEvent == none and pendingError == none and
+            finalError == none and decoder.bufferedLen() == 0,
+        "an Alt+Unicode sequence remains buffered until complete"
+    );
+    assert_key_event(
+        t,
+        finalEvent,
+        fletui::KeyCode.Character,
+        128578,
+        false,
+        true,
+        false,
+        "fragmented Escape plus UTF-8 decodes as Alt+Unicode"
+    );
+}
+
+test decoder_flushes_a_standalone_escape_after_timeout(
+    &testing::UnitTest t
+) {
+    decoder := fletui::Decoder::init();
+    [1]u8 input = [27];
+
+    feedError := decoder.feed(input[:]);
+    pendingEvent, pendingError := decoder.nextEvent();
+    waitingBefore := decoder.hasPendingEscape();
+    escapeEvent, escapeError := decoder.flushEscape();
+
+    asserts::is_true(
+        t,
+        feedError == none and
+            pendingEvent == none and pendingError == none and
+            waitingBefore and escapeError == none and
+            !decoder.hasPendingEscape() and
+            decoder.bufferedLen() == 0,
+        "a standalone Escape is emitted only when explicitly flushed"
+    );
+    assert_key_event(
+        t,
+        escapeEvent,
+        fletui::KeyCode.Escape,
+        0,
+        false,
+        false,
+        false,
+        "the timeout flush produces Escape"
+    );
+}
+
+test decoder_flushes_only_escape_from_incomplete_csi(
+    &testing::UnitTest t
+) {
+    decoder := fletui::Decoder::init();
+    [2]u8 input = [27, 91];
+
+    feedError := decoder.feed(input[:]);
+    pendingEvent, pendingError := decoder.nextEvent();
+    escapeEvent, escapeError := decoder.flushEscape();
+    bracketEvent, bracketError := decoder.nextEvent();
+
+    asserts::is_true(
+        t,
+        feedError == none and
+            pendingEvent == none and pendingError == none and
+            escapeError == none and bracketError == none and
+            decoder.bufferedLen() == 0,
+        "flushing an incomplete CSI consumes only its Escape byte"
+    );
+    assert_key_event(
+        t,
+        escapeEvent,
+        fletui::KeyCode.Escape,
+        0,
+        false,
+        false,
+        false,
+        "the timed-out prefix becomes Escape"
+    );
+    assert_key_event(
+        t,
+        bracketEvent,
+        fletui::KeyCode.Character,
+        91,
+        false,
+        false,
+        false,
+        "the incomplete CSI introducer remains as ordinary input"
     );
 }

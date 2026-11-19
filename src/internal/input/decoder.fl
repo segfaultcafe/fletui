@@ -1,6 +1,237 @@
 module fletui;
 under namespace root;
 
+@imports
+    :: lib::std::text::{strings, utf8, errors as text_errors}
+    :: lib::std::containers::collections as coll;
+
+const usize MAX_ESCAPE_SEQUENCE = 32;
+
+error DecodeError {
+    InvalidInput,
+}
+
+structure Decoder {
+    private coll::Array<u8> buffer;
+    private usize offset;
+};
+
+Decoder Decoder::init() override {
+    return build Decoder {
+        self.buffer = coll::Array<u8>::init();
+        self.offset = 0;
+    };
+}
+
+error Decoder::feed(&self, []const u8 input) {
+    return self->buffer.append(input);
+}
+
+bool Decoder::hasPendingEscape(&const self) {
+    if self->bufferedLen() == 0 {
+        return false;
+    }
+
+    bytes := self->pending();
+    return bytes[0] == 27;
+}
+
+(Event, error) Decoder::flushEscape(&self) {
+    if !self->hasPendingEscape() {
+        return (none, none);
+    }
+
+    event, decodeErr := self->nextEscapeEvent();
+    if event != none or decodeErr != none {
+        return (event, decodeErr);
+    }
+
+    // The seq is still incomplete after the timeout
+    self->consume(1);
+    return (key_event(KeyCode.Escape, 0, none), none);
+}
+
+(Event, error) Decoder::nextEvent(&self) {
+    if self->bufferedLen() == 0 {
+        return (none, none);
+    }
+
+    u8 value;
+    {
+        pending := self->pending();
+        value = pending[0];
+    }
+
+    if value == 27 {
+        return self->nextEscapeEvent();
+    }
+
+    if value >= 128 {
+        return self->nextUtf8Event();
+    }
+
+    event := decode_plain_key(value);
+    self->consume(1);
+
+    if event == none {
+        return (none, DecodeError.InvalidInput);
+    }
+
+    return (event, none);
+}
+
+private (Event, error) Decoder::nextAltEvent(&self) {
+    u8 value = self->pending()[1];
+    if value < 128 {
+        event := decode_plain_key(value);
+        self->consume(2);
+
+        if event == none {
+            return (none, DecodeError.InvalidInput);
+        }
+
+        event.key.modifiers.alt = true;
+        return (event, none);
+    }
+
+    const usize OFFSET = 1;
+    codepoint, nextOffset := try self->decodePendingUtf8(OFFSET) peek err as error {
+        if err == text_errors::Utf8Error.Truncated {
+            return none;
+        }
+
+        // Consume escape; the invalid byte is handle by the next call
+        self->consume(1);
+        err = DecodeError.InvalidInput;
+    };
+
+    self->consume(nextOffset);
+    event := key_event(KeyCode.Character, codepoint, none);
+    event.key.modifiers.alt = true;
+    return (event, none);
+}
+
+private (Event, error) Decoder::nextUtf8Event(&self) {
+    const usize OFFSET = 0;
+    codepoint, byteCount := try self->decodePendingUtf8(OFFSET) peek err as error {
+        if err == text_errors::Utf8Error.Truncated {
+            return none;
+        }
+
+        // consume only the invalid leading byte so following input survives
+        self->consume(1);
+        err = DecodeError.InvalidInput;
+    };
+
+    self->consume(byteCount);
+    return (key_event(KeyCode.Character, codepoint, none), none);
+}
+
+private (Event, error) Decoder::nextEscapeEvent(&self) {
+    u8 introducer;
+    {
+        // Since self->pending() borrows self, we use it inside a scoped
+        // block
+        bytes := self->pending();
+
+        // A standalone Escape may still become CSI, SS3, or Alt+key
+        if bytes.len() < 2 {
+            return (none, none);
+        }
+
+        introducer = bytes[1];
+    }
+
+    if introducer != 79 and introducer != 91 {
+        return self->nextAltEvent();
+    }
+
+    usize sequenceLen;
+    bool malformed;
+    {
+        bytes := self->pending();
+        if introducer == 79 {
+            if bytes.len() < 3 {
+                return (none, none);
+            }
+
+            sequenceLen = 3;
+        } else {
+            // CSI parameters/intermediates are 0x20-0x3f
+            usize i = 2;
+            while i < bytes.len() and i < MAX_ESCAPE_SEQUENCE {
+                u8 val = bytes[i];
+
+                if val >= 64 and val <= 126 {
+                    sequenceLen = i + 1;
+                    break;
+                }
+
+                if val < 32 or val > 63 {
+                    sequenceLen = i + 1;
+                    malformed = true;
+                    break;
+                }
+
+                i++;
+            }
+
+            if sequenceLen == 0 {
+                if bytes.len() < MAX_ESCAPE_SEQUENCE {
+                    return (none, none);
+                }
+
+                sequenceLen = MAX_ESCAPE_SEQUENCE;
+                malformed = true;
+            }
+        }
+    }
+
+    if malformed {
+        self->consume(sequenceLen);
+        return (none, DecodeError.InvalidInput);
+    }
+
+    Event event;
+    {
+        bytes := self->pending();
+        event = decode_escape_sequence(bytes[:sequenceLen]);
+    }
+
+    self->consume(sequenceLen);
+    if event == none {
+        return (none, DecodeError.InvalidInput);
+    }
+
+    return (event, none);
+}
+
+private []const u8 Decoder::pending(&const self) <-self {
+    bytes := self->buffer.view();
+    return bytes[self->offset:];
+}
+
+private (u32, usize, error) Decoder::decodePendingUtf8(&const self, usize offset) {
+    bytes := self->pending();
+    text := strings::stringv_from_bytes(bytes);
+    return utf8::decode(text, offset);
+}
+
+private void Decoder::consume(&self, usize count) {
+    self->offset += count;
+
+    if self->offset == self->buffer.len() {
+        self->buffer.clear();
+        self->offset = 0;
+    }
+}
+
+private usize Decoder::bufferedLen(&const self) {
+    return self->buffer.len() - self->offset;
+}
+
+// Decoder free functions
+
 Event key_event(KeyCode code, u32 codepoint, KeyModifiers modifiers) {
     return build Event {
         self.kind = EventKind.Key;
