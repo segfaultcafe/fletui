@@ -16,6 +16,7 @@ structure Decoder {
     private usize offset;
 };
 
+// Creates an empty decoder with no buffered terminal input.
 Decoder Decoder::init() override {
     return build Decoder {
         self.buffer = coll::Array<u8>::init();
@@ -23,10 +24,13 @@ Decoder Decoder::init() override {
     };
 }
 
+// Appends an input chunk to decoder-owned storage without decoding it.
 error Decoder::feed(&self, []const u8 input) {
     return self->buffer.append(input);
 }
 
+// Reports whether the next buffered event begins with Escape and may need a
+// timeout before it can be distinguished from an escape sequence or Alt key.
 bool Decoder::hasPendingEscape(&const self) {
     if self->bufferedLen() == 0 {
         return false;
@@ -36,6 +40,8 @@ bool Decoder::hasPendingEscape(&const self) {
     return bytes[0] == 27;
 }
 
+// Resolves a pending Escape after its input timeout. A complete sequence is
+// decoded normally; an incomplete prefix emits Escape and leaves later bytes.
 (Event, error) Decoder::flushEscape(&self) {
     if !self->hasPendingEscape() {
         return (none, none);
@@ -51,6 +57,8 @@ bool Decoder::hasPendingEscape(&const self) {
     return (key_event(KeyCode.Escape, 0, none), none);
 }
 
+// Decodes and consumes the next complete buffered event. Incomplete input
+// remains buffered and returns no event or error.
 (Event, error) Decoder::nextEvent(&self) {
     if self->bufferedLen() == 0 {
         return (none, none);
@@ -80,6 +88,8 @@ bool Decoder::hasPendingEscape(&const self) {
     return (event, none);
 }
 
+// Decodes an Escape-prefixed ASCII, control, or UTF-8 value as an Alt key.
+// Incomplete UTF-8 remains buffered; invalid input consumes only Escape.
 private (Event, error) Decoder::nextAltEvent(&self) {
     u8 value = self->pending()[1];
     if value < 128 {
@@ -100,7 +110,7 @@ private (Event, error) Decoder::nextAltEvent(&self) {
             return none;
         }
 
-        // Consume escape; the invalid byte is handle by the next call
+        // Consume Escape; the invalid byte is handled by the next call.
         self->consume(1);
         err = DecodeError.InvalidInput;
     };
@@ -111,6 +121,8 @@ private (Event, error) Decoder::nextAltEvent(&self) {
     return (event, none);
 }
 
+// Decodes the next UTF-8 scalar. Truncated input remains buffered, while an
+// invalid sequence consumes only its leading byte so later input survives.
 private (Event, error) Decoder::nextUtf8Event(&self) {
     const usize OFFSET = 0;
     codepoint, byteCount := try self->decodePendingUtf8(OFFSET) peek err as error {
@@ -127,6 +139,8 @@ private (Event, error) Decoder::nextUtf8Event(&self) {
     return (key_event(KeyCode.Character, codepoint, none), none);
 }
 
+// Decodes the next CSI, SS3, or Alt sequence. Incomplete sequences remain
+// buffered; malformed and unsupported complete sequences are consumed.
 private (Event, error) Decoder::nextEscapeEvent(&self) {
     u8 introducer;
     {
@@ -206,17 +220,21 @@ private (Event, error) Decoder::nextEscapeEvent(&self) {
     return (event, none);
 }
 
+// Borrows the unconsumed suffix of the decoder-owned byte buffer.
 private []const u8 Decoder::pending(&const self) <-self {
     bytes := self->buffer.view();
     return bytes[self->offset:];
 }
 
+// Decodes one UTF-8 scalar from the pending bytes at offset and returns the
+// offset immediately following that scalar.
 private (u32, usize, error) Decoder::decodePendingUtf8(&const self, usize offset) {
     bytes := self->pending();
     text := strings::stringv_from_bytes(bytes);
     return utf8::decode(text, offset);
 }
 
+// Advances past count pending bytes and releases storage once fully consumed.
 private void Decoder::consume(&self, usize count) {
     self->offset += count;
 
@@ -226,12 +244,14 @@ private void Decoder::consume(&self, usize count) {
     }
 }
 
+// Returns the number of buffered bytes that have not yet been consumed.
 private usize Decoder::bufferedLen(&const self) {
     return self->buffer.len() - self->offset;
 }
 
 // Decoder free functions
 
+// Builds a key event with an empty resize payload.
 Event key_event(KeyCode code, u32 codepoint, KeyModifiers modifiers) {
     return build Event {
         self.kind = EventKind.Key;
@@ -243,6 +263,7 @@ Event key_event(KeyCode code, u32 codepoint, KeyModifiers modifiers) {
     };
 }
 
+// Decodes one ASCII or control byte, returning no event for unsupported bytes.
 Event decode_plain_key(u8 value) {
     if value == 27 {
         return key_event(KeyCode.Escape, 0, none);
@@ -281,6 +302,8 @@ Event decode_plain_key(u8 value) {
     return none;
 }
 
+// Decodes one complete supported CSI or SS3 byte sequence. Incomplete,
+// malformed, unsupported, or oversized sequences return no event.
 Event decode_escape_sequence([]const u8 sequence) {
     if sequence.len() < 3 or sequence[0] != 27 {
         return none;
@@ -312,6 +335,7 @@ Event decode_escape_sequence([]const u8 sequence) {
     return none;
 }
 
+// Maps a supported single-byte CSI tilde parameter to its logical key.
 Event ansi_csi_tilde_event(u8 parameter) {
     if parameter == 49 {
         return key_event(KeyCode.Home, 0, none);
@@ -335,6 +359,7 @@ Event ansi_csi_tilde_event(u8 parameter) {
     return none;
 }
 
+// Maps a supported CSI or SS3 final byte to its logical navigation key.
 Event ansi_navigation_event(u8 finalByte) {
     if finalByte == 65 {
         return key_event(KeyCode.Up, 0, none);
@@ -358,6 +383,7 @@ Event ansi_navigation_event(u8 finalByte) {
     return none;
 }
 
+// Decodes a CSI navigation key with an xterm modifier parameter.
 Event ansi_csi_modified_event(u8 modifierByte, u8 finalByte) {
     // Modifier values are ASCII '2' through '8'.
     if modifierByte < 50 or modifierByte > 56 {

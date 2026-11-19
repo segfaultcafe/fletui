@@ -3,22 +3,50 @@ under namespace root;
 
 @imports
     :: root::fletui
-    :: lib::std::tests::asserts
     :: lib::std::tests::testing;
 
 test event_defaults_to_none_with_empty_payloads(&testing::UnitTest t) {
     fletui::Event event = none;
 
-    asserts::is_true(
-        t,
-        event.kind == fletui::EventKind.None and
-            event.key.code == fletui::KeyCode.Unknown and
-            !event.key.modifiers.shift and
-            !event.key.modifiers.alt and
-            !event.key.modifiers.control and
-            event.key.codepoint == 0 and
-            event.size.columns == 0 and event.size.rows == 0,
-        "the zero event is None with empty key and resize payloads"
+    t->recordAssertion(
+        event.kind == fletui::EventKind.None,
+        "event.kind == EventKind.None",
+        "the zero event has no active payload"
+    );
+    t->recordAssertion(
+        event.key.code == fletui::KeyCode.Unknown,
+        "event.key.code == KeyCode.Unknown",
+        "the zero event has no key code"
+    );
+    t->recordAssertion(
+        !event.key.modifiers.shift,
+        "!event.key.modifiers.shift",
+        "the zero event has no Shift modifier"
+    );
+    t->recordAssertion(
+        !event.key.modifiers.alt,
+        "!event.key.modifiers.alt",
+        "the zero event has no Alt modifier"
+    );
+    t->recordAssertion(
+        !event.key.modifiers.control,
+        "!event.key.modifiers.control",
+        "the zero event has no Control modifier"
+    );
+    t->recordAssertion(
+        event.key.codepoint == 0,
+        "event.key.codepoint == 0",
+        "the zero event has no codepoint"
+    );
+    t->recordAssertion(
+        event.size.columns == 0,
+        "event.size.columns == 0",
+        "the zero event has no column count"
+    );
+    t->recordAssertion(
+        event.size.rows == 0,
+        "event.size.rows == 0",
+        "the zero event has no row count"
     );
 }
 
@@ -36,15 +64,45 @@ test key_event_preserves_codepoint_and_modifiers(&testing::UnitTest t) {
         };
     };
 
-    asserts::is_true(
-        t,
-        event.kind == fletui::EventKind.Key and
-            event.key.code == fletui::KeyCode.Character and
-            event.key.codepoint == 128578 and
-            event.key.modifiers.shift and !event.key.modifiers.alt and
-            event.key.modifiers.control and
-            event.size.columns == 0 and event.size.rows == 0,
-        "a key event retains its Unicode scalar and independent modifiers"
+    t->recordAssertion(
+        event.kind == fletui::EventKind.Key,
+        "event.kind == EventKind.Key",
+        "the event retains its key kind"
+    );
+    t->recordAssertion(
+        event.key.code == fletui::KeyCode.Character,
+        "event.key.code == KeyCode.Character",
+        "the event retains its key code"
+    );
+    t->recordAssertion(
+        event.key.codepoint == 128578,
+        "event.key.codepoint == 128578",
+        "the event retains its Unicode scalar"
+    );
+    t->recordAssertion(
+        event.key.modifiers.shift,
+        "event.key.modifiers.shift",
+        "the event retains its Shift modifier"
+    );
+    t->recordAssertion(
+        !event.key.modifiers.alt,
+        "!event.key.modifiers.alt",
+        "the event retains its absent Alt modifier"
+    );
+    t->recordAssertion(
+        event.key.modifiers.control,
+        "event.key.modifiers.control",
+        "the event retains its Control modifier"
+    );
+    t->recordAssertion(
+        event.size.columns == 0,
+        "event.size.columns == 0",
+        "a key event has no column count"
+    );
+    t->recordAssertion(
+        event.size.rows == 0,
+        "event.size.rows == 0",
+        "a key event has no row count"
     );
 }
 
@@ -57,15 +115,44 @@ test resize_event_preserves_terminal_dimensions(&testing::UnitTest t) {
         };
     };
 
-    asserts::is_true(
-        t,
-        event.kind == fletui::EventKind.Resize and
-            event.size.columns == 120 and event.size.rows == 40 and
-            event.key.code == fletui::KeyCode.Unknown and
-            event.key.codepoint == 0 and
-            !event.key.modifiers.shift and
-            !event.key.modifiers.alt and
-            !event.key.modifiers.control,
-        "a resize event retains its dimensions and leaves key data empty"
+    t->recordAssertion(
+        event.kind == fletui::EventKind.Resize,
+        "event.kind == EventKind.Resize",
+        "the event retains its resize kind"
+    );
+    t->recordAssertion(
+        event.size.columns == 120,
+        "event.size.columns == 120",
+        "the resize event retains its columns"
+    );
+    t->recordAssertion(
+        event.size.rows == 40,
+        "event.size.rows == 40",
+        "the resize event retains its rows"
+    );
+    t->recordAssertion(
+        event.key.code == fletui::KeyCode.Unknown,
+        "event.key.code == KeyCode.Unknown",
+        "a resize event has no key code"
+    );
+    t->recordAssertion(
+        event.key.codepoint == 0,
+        "event.key.codepoint == 0",
+        "a resize event has no codepoint"
+    );
+    t->recordAssertion(
+        !event.key.modifiers.shift,
+        "!event.key.modifiers.shift",
+        "a resize event has no Shift modifier"
+    );
+    t->recordAssertion(
+        !event.key.modifiers.alt,
+        "!event.key.modifiers.alt",
+        "a resize event has no Alt modifier"
+    );
+    t->recordAssertion(
+        !event.key.modifiers.control,
+        "!event.key.modifiers.control",
+        "a resize event has no Control modifier"
     );
 }

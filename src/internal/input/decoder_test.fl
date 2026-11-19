@@ -66,6 +66,25 @@ void assert_key_event(
     );
 }
 
+void assert_none<T>(
+    &testing::UnitTest t,
+    &const T actual,
+    stringv assertion,
+    stringv message
+) {
+    t->recordAssertion(*actual == none, assertion, message);
+}
+
+void assert_buffered_len(
+    &testing::UnitTest t,
+    &const fletui::Decoder decoder,
+    usize expected,
+    stringv message
+) {
+    actual := decoder->bufferedLen();
+    asserts::numeric_equal<usize>(t, &actual, &expected, message);
+}
+
 test key_event_builds_a_complete_key_payload(&testing::UnitTest t) {
     event := fletui::key_event(
         fletui::KeyCode.Character,
@@ -199,13 +218,34 @@ test printable_ascii_boundaries_preserve_their_codepoints(
 }
 
 test unsupported_bytes_decode_as_no_event(&testing::UnitTest t) {
-    asserts::is_true(
+    nul := fletui::decode_plain_key(0);
+    unitSeparator := fletui::decode_plain_key(31);
+    firstNonAscii := fletui::decode_plain_key(128);
+    lastByte := fletui::decode_plain_key(255);
+
+    assert_none(
         t,
-        fletui::decode_plain_key(0) == none and
-            fletui::decode_plain_key(31) == none and
-            fletui::decode_plain_key(128) == none and
-            fletui::decode_plain_key(255) == none,
-        "NUL, non-letter controls, and non-ASCII bytes are ignored"
+        &nul,
+        "decode_plain_key(0) == none",
+        "NUL is ignored"
+    );
+    assert_none(
+        t,
+        &unitSeparator,
+        "decode_plain_key(31) == none",
+        "non-letter controls are ignored"
+    );
+    assert_none(
+        t,
+        &firstNonAscii,
+        "decode_plain_key(128) == none",
+        "the first non-ASCII byte is ignored"
+    );
+    assert_none(
+        t,
+        &lastByte,
+        "decode_plain_key(255) == none",
+        "the last non-ASCII byte is ignored"
     );
 }
 
@@ -279,16 +319,50 @@ test malformed_escape_sequences_decode_as_no_event(&testing::UnitTest t) {
     [3]u8 unknownFinal = [27, 91, 90];
     [4]u8 trailingByte = [27, 91, 65, 0];
 
-    asserts::is_true(
+    emptyEvent := fletui::decode_escape_sequence(empty[:]);
+    escapeOnlyEvent := fletui::decode_escape_sequence(escapeOnly[:]);
+    incompleteCsiEvent := fletui::decode_escape_sequence(incompleteCsi[:]);
+    missingEscapeEvent := fletui::decode_escape_sequence(missingEscape[:]);
+    wrongIntroducerEvent := fletui::decode_escape_sequence(wrongIntroducer[:]);
+    unknownFinalEvent := fletui::decode_escape_sequence(unknownFinal[:]);
+    trailingByteEvent := fletui::decode_escape_sequence(trailingByte[:]);
+
+    assert_none(t, &emptyEvent, "empty sequence == none", "empty input is ignored");
+    assert_none(
         t,
-        fletui::decode_escape_sequence(empty[:]) == none and
-            fletui::decode_escape_sequence(escapeOnly[:]) == none and
-            fletui::decode_escape_sequence(incompleteCsi[:]) == none and
-            fletui::decode_escape_sequence(missingEscape[:]) == none and
-            fletui::decode_escape_sequence(wrongIntroducer[:]) == none and
-            fletui::decode_escape_sequence(unknownFinal[:]) == none and
-            fletui::decode_escape_sequence(trailingByte[:]) == none,
-        "empty, incomplete, malformed, unknown, and oversized sequences are ignored"
+        &escapeOnlyEvent,
+        "Escape-only sequence == none",
+        "an incomplete Escape sequence is ignored"
+    );
+    assert_none(
+        t,
+        &incompleteCsiEvent,
+        "incomplete CSI sequence == none",
+        "an incomplete CSI sequence is ignored"
+    );
+    assert_none(
+        t,
+        &missingEscapeEvent,
+        "sequence without Escape == none",
+        "a sequence without an Escape prefix is ignored"
+    );
+    assert_none(
+        t,
+        &wrongIntroducerEvent,
+        "sequence with unknown introducer == none",
+        "an unknown Escape introducer is ignored"
+    );
+    assert_none(
+        t,
+        &unknownFinalEvent,
+        "sequence with unknown final byte == none",
+        "an unknown CSI final byte is ignored"
+    );
+    assert_none(
+        t,
+        &trailingByteEvent,
+        "sequence with trailing byte == none",
+        "an oversized sequence is ignored"
     );
 }
 
@@ -476,9 +550,12 @@ test modified_csi_arrows_decode_with_their_modifiers(
 
 test decoder_starts_with_an_empty_buffer(&testing::UnitTest t) {
     decoder := fletui::Decoder::init();
-    asserts::is_true(
-        t,
-        decoder.bufferedLen() == 0 and decoder.pending().len() == 0,
+    pending := decoder.pending();
+
+    assert_buffered_len(t, &decoder, 0, "a new decoder has no buffered input");
+    t->recordAssertion(
+        pending.len() == 0,
+        "decoder.pending().len() == 0",
         "a new decoder has no pending input"
     );
 }
@@ -491,12 +568,17 @@ test decoder_feed_owns_the_input_bytes(&testing::UnitTest t) {
     input[0] = 0;
     pending := decoder.pending();
 
-    asserts::is_true(
-        t,
-        feedErr == none and
-            decoder.bufferedLen() == 2 and
-            pending[0] == 27 and pending[1] == 91,
-        "feed copies input into decoder-owned storage"
+    assert_none(t, &feedErr, "feedErr == none", "feeding input succeeds");
+    assert_buffered_len(t, &decoder, 2, "feed buffers both input bytes");
+    t->recordAssertion(
+        pending[0] == 27,
+        "pending[0] == Escape",
+        "feed owns the first input byte"
+    );
+    t->recordAssertion(
+        pending[1] == 91,
+        "pending[1] == '['",
+        "feed owns the second input byte"
     );
 }
 
@@ -509,14 +591,33 @@ test decoder_feed_appends_chunks_in_order(&testing::UnitTest t) {
     secondError := decoder.feed(second[:]);
     pending := decoder.pending();
 
-    asserts::is_true(
+    assert_none(
         t,
-        firstError == none and secondError == none and
-            decoder.bufferedLen() == 3 and
-            pending[0] == 27 and
-            pending[1] == 91 and
-            pending[2] == 65,
-        "feed preserves byte order across chunks"
+        &firstError,
+        "firstError == none",
+        "feeding the first chunk succeeds"
+    );
+    assert_none(
+        t,
+        &secondError,
+        "secondError == none",
+        "feeding the second chunk succeeds"
+    );
+    assert_buffered_len(t, &decoder, 3, "feed appends all three bytes");
+    t->recordAssertion(
+        pending[0] == 27,
+        "pending[0] == Escape",
+        "the first chunk's first byte remains first"
+    );
+    t->recordAssertion(
+        pending[1] == 91,
+        "pending[1] == '['",
+        "the first chunk's second byte remains second"
+    );
+    t->recordAssertion(
+        pending[2] == 65,
+        "pending[2] == 'A'",
+        "the appended byte follows the first chunk"
     );
 }
 
@@ -526,11 +627,8 @@ test decoder_feed_accepts_an_empty_chunk(&testing::UnitTest t) {
 
     feedError := decoder.feed(empty[:]);
 
-    asserts::is_true(
-        t,
-        feedError == none and decoder.bufferedLen() == 0,
-        "feeding an empty chunk leaves the decoder empty"
-    );
+    assert_none(t, &feedError, "feedError == none", "feeding an empty chunk succeeds");
+    assert_buffered_len(t, &decoder, 0, "feeding an empty chunk leaves no input");
 }
 
 test decoder_next_event_needs_input_when_empty(&testing::UnitTest t) {
@@ -538,12 +636,19 @@ test decoder_next_event_needs_input_when_empty(&testing::UnitTest t) {
 
     event, decodeError := decoder.nextEvent();
 
-    asserts::is_true(
+    assert_none(
         t,
-        event == none and decodeError == none and
-            decoder.bufferedLen() == 0,
-        "an empty decoder produces no event and no error"
+        &event,
+        "event == none",
+        "an empty decoder produces no event"
     );
+    assert_none(
+        t,
+        &decodeError,
+        "decodeError == none",
+        "an empty decoder produces no error"
+    );
+    assert_buffered_len(t, &decoder, 0, "an empty decoder remains empty");
 }
 
 test decoder_next_event_decodes_and_consumes_plain_ascii(
@@ -555,12 +660,9 @@ test decoder_next_event_decodes_and_consumes_plain_ascii(
     feedError := decoder.feed(input[:]);
     event, decodeError := decoder.nextEvent();
 
-    asserts::is_true(
-        t,
-        feedError == none and decodeError == none and
-            decoder.bufferedLen() == 0,
-        "a decoded ASCII byte is consumed"
-    );
+    assert_none(t, &feedError, "feedError == none", "feeding ASCII succeeds");
+    assert_none(t, &decodeError, "decodeError == none", "decoding ASCII succeeds");
+    assert_buffered_len(t, &decoder, 0, "a decoded ASCII byte is consumed");
     assert_key_event(
         t,
         event,
@@ -584,14 +686,22 @@ test decoder_next_event_returns_multiple_buffered_events(
     second, secondError := decoder.nextEvent();
     remaining, remainingError := decoder.nextEvent();
 
-    asserts::is_true(
+    assert_none(t, &feedError, "feedError == none", "feeding both bytes succeeds");
+    assert_none(t, &firstError, "firstError == none", "decoding the first byte succeeds");
+    assert_none(t, &secondError, "secondError == none", "decoding the second byte succeeds");
+    assert_none(
         t,
-        feedError == none and
-            firstError == none and secondError == none and
-            remainingError == none and remaining == none and
-            decoder.bufferedLen() == 0,
-        "successive calls drain buffered events in order"
+        &remainingError,
+        "remainingError == none",
+        "reading after both events produces no error"
     );
+    assert_none(
+        t,
+        &remaining,
+        "remaining == none",
+        "reading after both events produces no event"
+    );
+    assert_buffered_len(t, &decoder, 0, "successive calls drain the buffer");
     assert_key_event(
         t,
         first,
@@ -624,14 +734,25 @@ test decoder_next_event_consumes_invalid_ascii_and_recovers(
     invalidEvent, invalidError := decoder.nextEvent();
     validEvent, validError := decoder.nextEvent();
 
-    asserts::is_true(
+    assert_none(t, &feedError, "feedError == none", "feeding mixed input succeeds");
+    assert_none(
         t,
-        feedError == none and
-            invalidEvent == none and
-            invalidError == fletui::DecodeError.InvalidInput and
-            validError == none and decoder.bufferedLen() == 0,
-        "invalid input is consumed without blocking later events"
+        &invalidEvent,
+        "invalidEvent == none",
+        "invalid ASCII produces no event"
     );
+    t->recordAssertion(
+        invalidError == fletui::DecodeError.InvalidInput,
+        "invalidError == DecodeError.InvalidInput",
+        "invalid ASCII reports invalid input"
+    );
+    assert_none(
+        t,
+        &validError,
+        "validError == none",
+        "valid input after an invalid byte still decodes"
+    );
+    assert_buffered_len(t, &decoder, 0, "invalid and valid bytes are consumed");
     assert_key_event(
         t,
         validEvent,
@@ -651,12 +772,15 @@ test decoder_keeps_a_standalone_escape_pending(&testing::UnitTest t) {
     feedError := decoder.feed(input[:]);
     event, decodeError := decoder.nextEvent();
 
-    asserts::is_true(
+    assert_none(t, &feedError, "feedError == none", "feeding Escape succeeds");
+    assert_none(t, &event, "event == none", "a standalone Escape remains pending");
+    assert_none(
         t,
-        feedError == none and event == none and decodeError == none and
-            decoder.bufferedLen() == 1,
-        "Escape remains pending because it may begin an ANSI sequence"
+        &decodeError,
+        "decodeError == none",
+        "a pending Escape is not invalid input"
     );
+    assert_buffered_len(t, &decoder, 1, "the pending Escape remains buffered");
 }
 
 test decoder_keeps_a_utf8_leading_byte_pending(&testing::UnitTest t) {
@@ -666,12 +790,15 @@ test decoder_keeps_a_utf8_leading_byte_pending(&testing::UnitTest t) {
     feedError := decoder.feed(input[:]);
     event, decodeError := decoder.nextEvent();
 
-    asserts::is_true(
+    assert_none(t, &feedError, "feedError == none", "feeding a UTF-8 lead byte succeeds");
+    assert_none(t, &event, "event == none", "an incomplete UTF-8 value emits no event");
+    assert_none(
         t,
-        feedError == none and event == none and decodeError == none and
-            decoder.bufferedLen() == 1,
-        "a UTF-8 leading byte remains pending until decoding is implemented"
+        &decodeError,
+        "decodeError == none",
+        "an incomplete UTF-8 value is not invalid input"
     );
+    assert_buffered_len(t, &decoder, 1, "the UTF-8 lead byte remains buffered");
 }
 
 test decoder_waits_for_a_fragmented_csi_sequence(
@@ -691,16 +818,45 @@ test decoder_waits_for_a_fragmented_csi_sequence(
     thirdFeedError := decoder.feed(finalByte[:]);
     finalEvent, finalDecodeError := decoder.nextEvent();
 
-    asserts::is_true(
+    assert_none(t, &firstFeedError, "firstFeedError == none", "feeding Escape succeeds");
+    assert_none(t, &firstEvent, "firstEvent == none", "Escape alone emits no event");
+    assert_none(
         t,
-        firstFeedError == none and secondFeedError == none and
-            thirdFeedError == none and
-            firstEvent == none and firstDecodeError == none and
-            secondEvent == none and secondDecodeError == none and
-            finalDecodeError == none and
-            decoder.bufferedLen() == 0,
-        "a CSI sequence remains buffered until its final byte arrives"
+        &firstDecodeError,
+        "firstDecodeError == none",
+        "Escape alone remains incomplete"
     );
+    assert_none(
+        t,
+        &secondFeedError,
+        "secondFeedError == none",
+        "feeding the CSI introducer succeeds"
+    );
+    assert_none(
+        t,
+        &secondEvent,
+        "secondEvent == none",
+        "an incomplete CSI sequence emits no event"
+    );
+    assert_none(
+        t,
+        &secondDecodeError,
+        "secondDecodeError == none",
+        "an incomplete CSI sequence is not invalid"
+    );
+    assert_none(
+        t,
+        &thirdFeedError,
+        "thirdFeedError == none",
+        "feeding the CSI final byte succeeds"
+    );
+    assert_none(
+        t,
+        &finalDecodeError,
+        "finalDecodeError == none",
+        "the complete CSI sequence decodes successfully"
+    );
+    assert_buffered_len(t, &decoder, 0, "the complete CSI sequence is consumed");
     assert_key_event(
         t,
         finalEvent,
@@ -730,16 +886,35 @@ test decoder_waits_for_a_fragmented_modified_csi_sequence(
     thirdFeedError := decoder.feed(third[:]);
     finalEvent, finalDecodeError := decoder.nextEvent();
 
-    asserts::is_true(
+    assert_none(
         t,
-        firstFeedError == none and secondFeedError == none and
-            thirdFeedError == none and
-            firstEvent == none and firstDecodeError == none and
-            secondEvent == none and secondDecodeError == none and
-            finalDecodeError == none and
-            decoder.bufferedLen() == 0,
-        "modified CSI input remains buffered across arbitrary chunks"
+        &firstFeedError,
+        "firstFeedError == none",
+        "feeding the first CSI chunk succeeds"
     );
+    assert_none(t, &firstEvent, "firstEvent == none", "the first CSI chunk emits no event");
+    assert_none(
+        t,
+        &firstDecodeError,
+        "firstDecodeError == none",
+        "the first CSI chunk remains incomplete"
+    );
+    assert_none(t, &secondFeedError, "secondFeedError == none", "feeding CSI modifiers succeeds");
+    assert_none(t, &secondEvent, "secondEvent == none", "CSI modifiers alone emit no event");
+    assert_none(
+        t,
+        &secondDecodeError,
+        "secondDecodeError == none",
+        "CSI modifiers without a final byte remain incomplete"
+    );
+    assert_none(t, &thirdFeedError, "thirdFeedError == none", "feeding the final byte succeeds");
+    assert_none(
+        t,
+        &finalDecodeError,
+        "finalDecodeError == none",
+        "the completed modified CSI sequence decodes successfully"
+    );
+    assert_buffered_len(t, &decoder, 0, "the modified CSI sequence is consumed");
     assert_key_event(
         t,
         finalEvent,
@@ -762,12 +937,15 @@ test decoder_decodes_ss3_and_preserves_following_input(
     upEvent, upError := decoder.nextEvent();
     characterEvent, characterError := decoder.nextEvent();
 
-    asserts::is_true(
+    assert_none(t, &feedError, "feedError == none", "feeding SS3 and trailing input succeeds");
+    assert_none(t, &upError, "upError == none", "decoding SS3 succeeds");
+    assert_none(
         t,
-        feedError == none and upError == none and
-            characterError == none and decoder.bufferedLen() == 0,
-        "SS3 consumes only its own bytes"
+        &characterError,
+        "characterError == none",
+        "decoding input after SS3 succeeds"
     );
+    assert_buffered_len(t, &decoder, 0, "SS3 and following input are consumed");
     assert_key_event(
         t,
         upEvent,
@@ -800,13 +978,20 @@ test decoder_rejects_unknown_csi_and_recovers(
     invalidEvent, invalidError := decoder.nextEvent();
     validEvent, validError := decoder.nextEvent();
 
-    asserts::is_true(
+    assert_none(t, &feedError, "feedError == none", "feeding unknown CSI input succeeds");
+    assert_none(
         t,
-        feedError == none and invalidEvent == none and
-            invalidError == fletui::DecodeError.InvalidInput and
-            validError == none and decoder.bufferedLen() == 0,
-        "an unknown complete CSI sequence is consumed before recovery"
+        &invalidEvent,
+        "invalidEvent == none",
+        "an unknown CSI sequence produces no event"
     );
+    t->recordAssertion(
+        invalidError == fletui::DecodeError.InvalidInput,
+        "invalidError == DecodeError.InvalidInput",
+        "an unknown CSI sequence reports invalid input"
+    );
+    assert_none(t, &validError, "validError == none", "input after unknown CSI decodes");
+    assert_buffered_len(t, &decoder, 0, "unknown CSI and following input are consumed");
     assert_key_event(
         t,
         validEvent,
@@ -834,15 +1019,11 @@ test decoder_decodes_multibyte_utf8_code_points(
     euro, euroError := decoder.nextEvent();
     smile, smileError := decoder.nextEvent();
 
-    asserts::is_true(
-        t,
-        feedError == none and
-            centError == none and
-            euroError == none and
-            smileError == none and
-            decoder.bufferedLen() == 0,
-        "complete UTF-8 code points are consumed independently"
-    );
+    assert_none(t, &feedError, "feedError == none", "feeding UTF-8 input succeeds");
+    assert_none(t, &centError, "centError == none", "decoding two-byte UTF-8 succeeds");
+    assert_none(t, &euroError, "euroError == none", "decoding three-byte UTF-8 succeeds");
+    assert_none(t, &smileError, "smileError == none", "decoding four-byte UTF-8 succeeds");
+    assert_buffered_len(t, &decoder, 0, "all complete UTF-8 code points are consumed");
     assert_key_event(
         t,
         cent,
@@ -892,17 +1073,45 @@ test decoder_waits_for_fragmented_utf8(
     lastFeedError := decoder.feed(last[:]);
     finalEvent, finalDecodeError := decoder.nextEvent();
 
-    asserts::is_true(
+    assert_none(
         t,
-        firstFeedError == none and
-            middleFeedError == none and
-            lastFeedError == none and
-            firstEvent == none and firstDecodeError == none and
-            middleEvent == none and middleDecodeError == none and
-            finalDecodeError == none and
-            decoder.bufferedLen() == 0,
-        "fragmented UTF-8 remains buffered until complete"
+        &firstFeedError,
+        "firstFeedError == none",
+        "feeding the UTF-8 lead byte succeeds"
     );
+    assert_none(t, &firstEvent, "firstEvent == none", "a UTF-8 lead byte emits no event");
+    assert_none(
+        t,
+        &firstDecodeError,
+        "firstDecodeError == none",
+        "a UTF-8 lead byte remains incomplete"
+    );
+    assert_none(
+        t,
+        &middleFeedError,
+        "middleFeedError == none",
+        "feeding middle UTF-8 bytes succeeds"
+    );
+    assert_none(t, &middleEvent, "middleEvent == none", "incomplete UTF-8 emits no event");
+    assert_none(
+        t,
+        &middleDecodeError,
+        "middleDecodeError == none",
+        "incomplete UTF-8 is not invalid"
+    );
+    assert_none(
+        t,
+        &lastFeedError,
+        "lastFeedError == none",
+        "feeding the final UTF-8 byte succeeds"
+    );
+    assert_none(
+        t,
+        &finalDecodeError,
+        "finalDecodeError == none",
+        "completed fragmented UTF-8 decodes successfully"
+    );
+    assert_buffered_len(t, &decoder, 0, "completed fragmented UTF-8 is consumed");
     assert_key_event(
         t,
         finalEvent,
@@ -926,16 +1135,31 @@ test decoder_rejects_invalid_utf8_and_preserves_following_ascii(
     parenthesis, parenthesisError := decoder.nextEvent();
     character, characterError := decoder.nextEvent();
 
-    asserts::is_true(
+    assert_none(t, &feedError, "feedError == none", "feeding malformed UTF-8 succeeds");
+    assert_none(
         t,
-        feedError == none and
-            invalidEvent == none and
-            invalidError == fletui::DecodeError.InvalidInput and
-            parenthesisError == none and
-            characterError == none and
-            decoder.bufferedLen() == 0,
-        "invalid UTF-8 consumes only its leading byte"
+        &invalidEvent,
+        "invalidEvent == none",
+        "malformed UTF-8 produces no event"
     );
+    t->recordAssertion(
+        invalidError == fletui::DecodeError.InvalidInput,
+        "invalidError == DecodeError.InvalidInput",
+        "malformed UTF-8 reports invalid input"
+    );
+    assert_none(
+        t,
+        &parenthesisError,
+        "parenthesisError == none",
+        "ASCII immediately after malformed UTF-8 decodes"
+    );
+    assert_none(
+        t,
+        &characterError,
+        "characterError == none",
+        "later ASCII after malformed UTF-8 decodes"
+    );
+    assert_buffered_len(t, &decoder, 0, "malformed UTF-8 and following ASCII are consumed");
     assert_key_event(
         t,
         parenthesis,
@@ -968,13 +1192,15 @@ test decoder_decodes_alt_ascii_and_control_keys(
     altX, altXError := decoder.nextEvent();
     altControlA, altControlAError := decoder.nextEvent();
 
-    asserts::is_true(
+    assert_none(t, &feedError, "feedError == none", "feeding Alt sequences succeeds");
+    assert_none(t, &altXError, "altXError == none", "decoding Alt+x succeeds");
+    assert_none(
         t,
-        feedError == none and
-            altXError == none and altControlAError == none and
-            decoder.bufferedLen() == 0,
-        "Alt sequences consume Escape and their key byte"
+        &altControlAError,
+        "altControlAError == none",
+        "decoding Alt+Control+A succeeds"
     );
+    assert_buffered_len(t, &decoder, 0, "both Alt sequences are consumed");
     assert_key_event(
         t,
         altX,
@@ -1010,13 +1236,32 @@ test decoder_waits_for_fragmented_alt_utf8(
     secondFeedError := decoder.feed(second[:]);
     finalEvent, finalError := decoder.nextEvent();
 
-    asserts::is_true(
+    assert_none(
         t,
-        firstFeedError == none and secondFeedError == none and
-            pendingEvent == none and pendingError == none and
-            finalError == none and decoder.bufferedLen() == 0,
-        "an Alt+Unicode sequence remains buffered until complete"
+        &firstFeedError,
+        "firstFeedError == none",
+        "feeding partial Alt+Unicode succeeds"
     );
+    assert_none(
+        t,
+        &pendingEvent,
+        "pendingEvent == none",
+        "partial Alt+Unicode emits no event"
+    );
+    assert_none(
+        t,
+        &pendingError,
+        "pendingError == none",
+        "partial Alt+Unicode remains incomplete"
+    );
+    assert_none(
+        t,
+        &secondFeedError,
+        "secondFeedError == none",
+        "feeding remaining Unicode succeeds"
+    );
+    assert_none(t, &finalError, "finalError == none", "complete Alt+Unicode decodes successfully");
+    assert_buffered_len(t, &decoder, 0, "complete Alt+Unicode is consumed");
     assert_key_event(
         t,
         finalEvent,
@@ -1040,15 +1285,26 @@ test decoder_flushes_a_standalone_escape_after_timeout(
     waitingBefore := decoder.hasPendingEscape();
     escapeEvent, escapeError := decoder.flushEscape();
 
-    asserts::is_true(
+    assert_none(t, &feedError, "feedError == none", "feeding Escape succeeds");
+    assert_none(t, &pendingEvent, "pendingEvent == none", "Escape waits before timeout");
+    assert_none(
         t,
-        feedError == none and
-            pendingEvent == none and pendingError == none and
-            waitingBefore and escapeError == none and
-            !decoder.hasPendingEscape() and
-            decoder.bufferedLen() == 0,
-        "a standalone Escape is emitted only when explicitly flushed"
+        &pendingError,
+        "pendingError == none",
+        "a waiting Escape is not invalid"
     );
+    t->recordAssertion(
+        waitingBefore,
+        "hasPendingEscape() before flush",
+        "the decoder recognizes a pending Escape"
+    );
+    assert_none(t, &escapeError, "escapeError == none", "flushing Escape succeeds");
+    t->recordAssertion(
+        !decoder.hasPendingEscape(),
+        "!hasPendingEscape() after flush",
+        "the decoder no longer has a pending Escape"
+    );
+    assert_buffered_len(t, &decoder, 0, "flushing Escape consumes it");
     assert_key_event(
         t,
         escapeEvent,
@@ -1072,14 +1328,27 @@ test decoder_flushes_only_escape_from_incomplete_csi(
     escapeEvent, escapeError := decoder.flushEscape();
     bracketEvent, bracketError := decoder.nextEvent();
 
-    asserts::is_true(
+    assert_none(t, &feedError, "feedError == none", "feeding incomplete CSI succeeds");
+    assert_none(
         t,
-        feedError == none and
-            pendingEvent == none and pendingError == none and
-            escapeError == none and bracketError == none and
-            decoder.bufferedLen() == 0,
-        "flushing an incomplete CSI consumes only its Escape byte"
+        &pendingEvent,
+        "pendingEvent == none",
+        "incomplete CSI waits for more input"
     );
+    assert_none(
+        t,
+        &pendingError,
+        "pendingError == none",
+        "incomplete CSI is not invalid"
+    );
+    assert_none(t, &escapeError, "escapeError == none", "flushing CSI Escape succeeds");
+    assert_none(
+        t,
+        &bracketError,
+        "bracketError == none",
+        "the remaining bracket decodes successfully"
+    );
+    assert_buffered_len(t, &decoder, 0, "Escape and remaining bracket are consumed");
     assert_key_event(
         t,
         escapeEvent,
