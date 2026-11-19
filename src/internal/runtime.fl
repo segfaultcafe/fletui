@@ -34,5 +34,6 @@ extern unsafe i32 fletui_v1_terminal_read(
 extern unsafe i32 fletui_v1_terminal_poll(
     *void handle,
     i32 timeout_ms,
-    *u8 ready
+    *u8 input_ready,
+    *u8 resize_ready
 );

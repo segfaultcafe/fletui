@@ -348,27 +348,67 @@ foreign c {
         }
     }
 
+    static int32_t fletui_v1_drain_resize_notifications(FletuiTerminal *terminal) {
+        uint8_t notifications[64];
+
+        for (;;) {
+            ssize_t count = read(
+                terminal->resize_read_fd,
+                notifications,
+                sizeof(notifications)
+            );
+
+            if (count > 0) {
+                continue;
+            }
+
+            if (count < 0 && errno == EINTR) {
+                continue;
+            }
+
+            if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                return FLETUI_STATUS_OK;
+            }
+
+            return FLETUI_STATUS_IO_ERROR;
+        }
+    }
+
     int32_t fletui_v1_terminal_poll(
         void *opaque,
         int32_t timeout_ms,
-        uint8_t *ready
+        uint8_t *input_ready,
+        uint8_t *resize_ready
     ) {
         FletuiTerminal *terminal = opaque;
 
-        if (terminal == NULL || ready == NULL || timeout_ms < -1) {
+        if (
+            terminal == NULL ||
+            input_ready == NULL ||
+            resize_ready == NULL ||
+            timeout_ms < -1
+        ) {
             return FLETUI_STATUS_INVALID_ARGUMENT;
         }
 
-        *ready = 0;
+        *input_ready = 0;
+        *resize_ready = 0;
 
-        struct pollfd descriptor = {
-            .fd = terminal->input_fd,
-            .events = POLLIN,
-            .revents = 0,
+        struct pollfd descriptors[2] = {
+            {
+                .fd = terminal->input_fd,
+                .events = POLLIN,
+                .revents = 0,
+            },
+            {
+                .fd = terminal->resize_read_fd,
+                .events = POLLIN,
+                .revents = 0,
+            },
         };
 
         for (;;) {
-            int result = poll(&descriptor, 1, timeout_ms);
+            int result = poll(descriptors, 2, timeout_ms);
             if (result < 0 && errno == EINTR) {
                 continue;
             }
@@ -381,17 +421,28 @@ foreign c {
                 return FLETUI_STATUS_OK;
             }
 
-            if ((descriptor.revents & POLLIN) != 0) {
-                *ready = 1;
-                return FLETUI_STATUS_OK;
+            if ((descriptors[0].revents & POLLIN) != 0) {
+                *input_ready = 1;
             }
 
-            if (
-                (descriptor.revents & POLLERR) != 0 ||
-                (descriptor.revents & POLLHUP) != 0 ||
-                (descriptor.revents & POLLNVAL) != 0
-            ) {
-                return FLETUI_STATUS_IO_ERROR;
+            if ((descriptors[1].revents & POLLIN) != 0) {
+                int32_t status =
+                    fletui_v1_drain_resize_notifications(terminal);
+                if (status != FLETUI_STATUS_OK) {
+                    return status;
+                }
+
+                *resize_ready = 1;
+            }
+
+            for (size_t index = 0; index < 2; index += 1) {
+                if (
+                    (descriptors[index].revents & POLLERR) != 0 ||
+                    (descriptors[index].revents & POLLHUP) != 0 ||
+                    (descriptors[index].revents & POLLNVAL) != 0
+                ) {
+                    return FLETUI_STATUS_IO_ERROR;
+                }
             }
 
             return FLETUI_STATUS_OK;
