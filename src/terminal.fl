@@ -3,6 +3,11 @@ module fletui;
 const i32 ESCAPE_TIMEOUT_MS = 25;
 const i32 WAIT_INDEFINITELY = -1;
 
+structure PollResult {
+    bool inputReady;
+    bool resizeReady;
+};
+
 // Acquires the process terminal, enables raw mode, and initializes its input
 // decoder. The returned Terminal owns the native handle until teardown.
 (Terminal, error) Terminal::open() {
@@ -96,8 +101,17 @@ error Terminal::writeAll(&const self, stringv source) {
             timeoutMs = ESCAPE_TIMEOUT_MS;
         }
 
-        readable := try self->poll(timeoutMs);
-        if !readable {
+        readiness := try self->poll(timeoutMs);
+        if readiness.resizeReady {
+            size := try self->size();
+
+            return (build Event {
+                self.kind = EventKind.Resize;
+                self.size = size;
+            }, none);
+        }
+
+        if !readiness.inputReady {
             event, flushErr := self->decoder.flushEscape();
             if flushErr == DecodeError.InvalidInput {
                 proceed;
@@ -123,23 +137,27 @@ error Terminal::writeAll(&const self, stringv source) {
     }
 }
 
-// Waits until input becomes readable or timeoutMs elapses. A timeout of -1
-// waits indefinitely; zero checks without blocking.
-private (bool, error) Terminal::poll(&const self, i32 timeoutMs) {
+// Waits until input, a resize notification, or timeoutMs elapses. A timeout
+// of -1 waits indefinitely; zero checks without blocking.
+private (PollResult, error) Terminal::poll(&const self, i32 timeoutMs) {
     try self->healthCheck();
 
-    u8 ready = 0;
+    u8 inputReady = 0, resizeReady = 0;
     unsafe {
         i32 status = fletui_v1_terminal_poll(
             self->handle,
             timeoutMs,
-            &raw ready
+            &raw inputReady,
+            &raw resizeReady
         );
 
         try error_from_status(status, FletuiError.PollFailed);
     }
 
-    return (ready != 0, none);
+    return (build PollResult {
+        self.inputReady = inputReady != 0;
+        self.resizeReady = resizeReady != 0;
+    }, none);
 }
 
 // Reads the bytes currently available without blocking. This stays private so

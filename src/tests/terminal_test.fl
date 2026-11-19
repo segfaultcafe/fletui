@@ -72,13 +72,18 @@ test closed_terminal_rejects_internal_input_operations(
     fletui::Terminal terminal = none;
     [1]u8 input = none;
 
-    ready, pollError := terminal.poll(0);
+    readiness, pollError := terminal.poll(0);
     bytesRead, readError := terminal.read(input[:]);
 
     asserts::is_false(
         t,
-        ready,
-        "a closed Terminal is not readable"
+        readiness.inputReady,
+        "a closed Terminal has no readable input"
+    );
+    asserts::is_false(
+        t,
+        readiness.resizeReady,
+        "a closed Terminal has no pending resize"
     );
     asserts::has_error_variant(
         t,
