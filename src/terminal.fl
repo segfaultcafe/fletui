@@ -187,3 +187,4 @@ private error Terminal::healthCheck(&const self) {
 
     return none;
 }
+
