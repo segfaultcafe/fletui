@@ -1,0 +1,158 @@
+module main;
+
+@imports
+    :: lib::fletui::fletui
+    :: lib::std::fmt
+    :: lib::std::text::strings;
+
+const u8 ESCAPE = 27;
+const u32 LOWERCASE_Q = 113;
+const u32 UPPERCASE_Q = 81;
+const u32 LOWERCASE_C = 99;
+
+structure Inspector {
+    fletui::Size terminalSize;
+    u64 eventCount;
+    string lastEvent;
+    bool running;
+};
+
+Inspector Inspector::start(fletui::Size terminalSize) {
+    return build Inspector {
+        self.terminalSize = terminalSize;
+        self.lastEvent = "Waiting for keyboard input or a resize...".string();
+        self.running = true;
+    };
+}
+
+error Inspector::apply(&self, fletui::Event event) {
+    self->eventCount++;
+
+    if event.kind == fletui::EventKind.Resize {
+        self->terminalSize = event.size;
+        self->lastEvent = try fmt::sprintf(
+            "Resize: {} columns x {} rows",
+            event.size.columns,
+            event.size.rows
+        );
+        return none;
+    }
+
+    if event.kind != fletui::EventKind.Key {
+        self->lastEvent = "No event".string();
+        return none;
+    }
+
+    self->lastEvent = try describe_key(event.key);
+    if is_quit_key(event.key) {
+        self->running = false;
+    }
+
+    return none;
+}
+
+bool Inspector::isRunning(&const self) {
+    return self->running;
+}
+
+(string, error) Inspector::view(&const self) {
+    content := try fmt::sprintf(
+        "FletUI event inspector\n======================\n\nTerminal size : {} columns x {} rows\nEvents seen   : {}\nLast event    : {}\n\nTry arrow keys, modified arrows, UTF-8 text, and resizing.\nPress q, Escape, or Ctrl+C to quit.\n",
+        self->terminalSize.columns,
+        self->terminalSize.rows,
+        self->eventCount,
+        self->lastEvent
+    );
+
+    return (content, none);
+}
+
+i32 main() {
+    runError := run_inspector();
+    if runError != none {
+        stderrln("event-inspector: unable to run in this terminal");
+        return 1;
+    }
+
+    return 0;
+}
+
+error run_inspector() {
+    terminal := try fletui::Terminal::open();
+    terminalSize := try terminal.size();
+    inspector := Inspector::start(terminalSize);
+
+    while inspector.isRunning() {
+        frame := try inspector.view();
+        try present(&terminal, frame.view());
+
+        event := try terminal.readEvent();
+        try inspector.apply(event);
+    }
+
+    return terminal.writeAll("\r\nEvent inspector closed.\r\n");
+}
+
+error present(&const fletui::Terminal terminal, stringv content) {
+    output := strings::StringBuilder::init();
+    try output.appendChar(ESCAPE as char);
+    try output.append("[H");
+
+    loop u32 index = 0; index < content.len(); index++ {
+        char value = content[index];
+        if value == '\n' and (index == 0 or content[index - 1] != '\r') {
+            try output.appendChar('\r');
+        }
+
+        try output.appendChar(value);
+    }
+
+    try output.appendChar(ESCAPE as char);
+    try output.append("[J");
+    frame := try output.toString();
+    return terminal->writeAll(frame.view());
+}
+
+(string, error) describe_key(fletui::KeyEvent key) {
+    return fmt::sprintf(
+        "Key: {} | codepoint={} | shift={} alt={} control={}",
+        key_name(key.code),
+        key.codepoint,
+        key.modifiers.shift,
+        key.modifiers.alt,
+        key.modifiers.control
+    );
+}
+
+stringv key_name(fletui::KeyCode code) {
+    if code == fletui::KeyCode.Character { return "Character"; }
+    if code == fletui::KeyCode.Enter { return "Enter"; }
+    if code == fletui::KeyCode.Escape { return "Escape"; }
+    if code == fletui::KeyCode.Backspace { return "Backspace"; }
+    if code == fletui::KeyCode.Tab { return "Tab"; }
+    if code == fletui::KeyCode.Up { return "Up"; }
+    if code == fletui::KeyCode.Down { return "Down"; }
+    if code == fletui::KeyCode.Left { return "Left"; }
+    if code == fletui::KeyCode.Right { return "Right"; }
+    if code == fletui::KeyCode.Home { return "Home"; }
+    if code == fletui::KeyCode.End { return "End"; }
+    if code == fletui::KeyCode.PageUp { return "PageUp"; }
+    if code == fletui::KeyCode.PageDown { return "PageDown"; }
+    if code == fletui::KeyCode.Insert { return "Insert"; }
+    if code == fletui::KeyCode.Delete { return "Delete"; }
+    return "Unknown";
+}
+
+bool is_quit_key(fletui::KeyEvent key) {
+    if key.code == fletui::KeyCode.Escape {
+        return true;
+    }
+
+    if key.code != fletui::KeyCode.Character {
+        return false;
+    }
+
+    return key.codepoint == LOWERCASE_Q or
+        key.codepoint == UPPERCASE_Q or
+        (key.modifiers.control and key.codepoint == LOWERCASE_C);
+}

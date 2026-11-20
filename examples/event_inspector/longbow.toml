@@ -1,0 +1,7 @@
+[package]
+name = "fletui-event-inspector"
+version = "0.1.0"
+kind = "program"
+
+[dependencies]
+fletui = { path = "../.." }

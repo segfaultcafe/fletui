@@ -1,0 +1,40 @@
+{
+  "schema": 1,
+  "root": "root",
+  "packages": [
+    {
+      "id": "path-1",
+      "identity": "local/fletui",
+      "source": {
+        "kind": "path",
+        "path": "../.."
+      },
+      "version": "0.1.0",
+      "checksum": "sha256:02c74bef91be31f9ef22020a3959dcb943a66ba1a48822c1c4d24cb6cd7d2eb9",
+      "dependencies": {
+        "std": "toolchain-std"
+      }
+    },
+    {
+      "id": "root",
+      "identity": "local/fletui_event_inspector",
+      "source": {
+        "kind": "workspace",
+        "path": "."
+      },
+      "version": "0.1.0",
+      "dependencies": {
+        "fletui": "path-1",
+        "std": "toolchain-std"
+      }
+    },
+    {
+      "id": "toolchain-std",
+      "identity": "flecha/std",
+      "source": {
+        "kind": "toolchain"
+      },
+      "dependencies": {}
+    }
+  ]
+}
